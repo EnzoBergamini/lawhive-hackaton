@@ -76,6 +76,11 @@ class CaseFile(BaseModel):
 
     matter_type: str = Field(description="Type of dispute, in a few words.")
     summary: str = Field(description="2-3 neutral sentences about the case.")
+    case_assessment: str = Field(
+        default="",
+        description="Plain-English assessment of the case for the client, "
+        "grounded in the documents — a few paragraphs separated by blank lines.",
+    )
     parties: list[Party] = Field(default_factory=list)
     amount_in_dispute: Money | None = None
     next_deadline: Deadline | None = None

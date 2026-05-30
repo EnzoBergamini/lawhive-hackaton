@@ -33,6 +33,8 @@ export default function App() {
   const [uploadResult, setUploadResult] = useState(null);
   const [dossier, setDossier] = useState(null);
   const [loadingDossier, setLoadingDossier] = useState(false);
+  const [assessment, setAssessment] = useState(null); // null = not loaded yet
+  const [assessmentLoading, setAssessmentLoading] = useState(false);
   const scrollRef = useRef(null);
   const fileRef = useRef(null);
   const taRef = useRef(null);
@@ -165,7 +167,9 @@ export default function App() {
     }
   }
 
-  // Extract the structured case file (synthesis + timeline) and show it.
+  // Extract the structured case file (synthesis + timeline) and show it; the
+  // written assessment is fetched separately afterwards so the timeline appears
+  // first while the assessment loads.
   async function showDossier() {
     setLoadingDossier(true);
     try {
@@ -177,11 +181,31 @@ export default function App() {
       const data = await res.json();
       setDossier(data);
       setPhase("dossier");
+      loadAssessment();
     } catch {
       setDossier({ error: true });
       setPhase("dossier");
     } finally {
       setLoadingDossier(false);
+    }
+  }
+
+  // Deferred: the plain-English assessment, loaded after the timeline is shown.
+  async function loadAssessment() {
+    setAssessment(null);
+    setAssessmentLoading(true);
+    try {
+      const res = await fetch("/api/assessment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+      const data = await res.json();
+      setAssessment(data.case_assessment || "");
+    } catch {
+      setAssessment("");
+    } finally {
+      setAssessmentLoading(false);
     }
   }
 
@@ -221,7 +245,14 @@ export default function App() {
     );
   }
   if (phase === "dossier") {
-    return <DossierScreen data={dossier} onBack={() => setPhase("done")} />;
+    return (
+      <DossierScreen
+        data={dossier}
+        assessment={assessment}
+        assessmentLoading={assessmentLoading}
+        onBack={() => setPhase("done")}
+      />
+    );
   }
 
   return (
@@ -502,7 +533,7 @@ function formatMoney(m) {
   }
 }
 
-function DossierScreen({ data, onBack }) {
+function DossierScreen({ data, assessment, assessmentLoading, onBack }) {
   if (!data || data.error) {
     return (
       <div className="tone-screen">
@@ -570,6 +601,28 @@ function DossierScreen({ data, onBack }) {
             )}
           </div>
         </section>
+
+        {(assessmentLoading || assessment) && (
+          <section className="case-assessment">
+            <div className="ca-label">Case assessment</div>
+            {assessmentLoading ? (
+              <div className="ca-loading">
+                <span className="ca-spinner" />
+                Analysing your case…
+              </div>
+            ) : (
+              assessment
+                .split(/\n+/)
+                .map((p) => p.trim())
+                .filter(Boolean)
+                .map((p, i) => (
+                  <p key={i} className="ca-p">
+                    {p}
+                  </p>
+                ))
+            )}
+          </section>
+        )}
 
         <section className="timeline">
           {events.map((e, i) => (
