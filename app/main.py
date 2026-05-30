@@ -77,6 +77,12 @@ async def dossier(req: DossierRequest):
     return case.model_dump(mode="json")
 
 
+@app.post("/api/assessment")
+async def assessment(req: DossierRequest):
+    """Write the plain-English case assessment (loaded after the timeline)."""
+    return {"case_assessment": await agent.build_assessment(req.session_id)}
+
+
 @app.get("/api/document")
 def document(session_id: str, name: str):
     """Serve an uploaded document inline, so a timeline card can open it."""
