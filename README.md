@@ -1,4 +1,4 @@
-# Intake Agent
+# CLEARFILE
 
 A minimalist conversational **legal intake assistant**. It interviews a
 prospective client, gathers the facts a lawyer needs, and lets the client upload
@@ -9,7 +9,7 @@ AI gateway, called via **pydantic-ai**.
 
 ## How it works
 
-1. The **Intake Agent** greets the client and asks *"What is the legal issue you
+1. **CLEARFILE** greets the client and asks *"What is the legal issue you
    need help with?"*
 2. From the description it asks focused follow-up questions, one at a time
    (parties, timeline, amounts, desired outcome, deadlines, steps taken…).

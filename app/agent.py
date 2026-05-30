@@ -1,4 +1,4 @@
-"""Intake Agent powered by Claude (via the Lawhive gateway) and pydantic-ai.
+"""CLEARFILE — legal intake agent powered by Claude (via the Lawhive gateway) and pydantic-ai.
 
 The agent runs a guided conversation with a prospective client:
   1. The client first picks a tone of voice for the agent.
@@ -18,6 +18,7 @@ import os
 from dataclasses import dataclass, field
 
 from anthropic import AsyncAnthropic
+from pydantic import BaseModel, Field
 from pydantic_ai import Agent, BinaryContent, RunContext
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage
@@ -33,8 +34,8 @@ MODEL = os.environ.get("LAWHIVE_MODEL", "vertex_ai/claude-opus-4-7")
 # --- Prompt ------------------------------------------------------------------
 
 SYSTEM_PROMPT = """\
-You are the "Intake Agent", a warm, professional legal intake assistant for a UK
-law firm. You are NOT a lawyer and you do not give legal advice or predict
+You are "CLEARFILE", a warm, professional legal intake assistant for a UK law
+firm. You are NOT a lawyer and you do not give legal advice or predict
 outcomes. Your single job is to interview a prospective client so that a human
 lawyer can quickly understand their situation and decide how to help.
 
@@ -60,15 +61,21 @@ How to conduct the interview:
   rephrase once; never repeat a question a third time. If something stays
   unclear, just note it and move to a different topic.
 - Once you have a useful picture (or after 6 questions), STOP asking. Summarise
-  what you understood in 2-3 sentences, invite the client to upload any relevant
-  documents using the attach button, and tell them a lawyer will review their
-  case.
+  what you understood in 2-3 sentences, let the client know they'll be able to
+  add any supporting documents next, and that a lawyer will review their case.
 - If the client uploads documents, briefly acknowledge what you read in them
   (parties, dates, amounts) and ask only about anything still genuinely missing
   (within the 6-question budget).
 
 Never invent facts. If something is unknown, leave it for the lawyer. Keep every
 message concise — a couple of short paragraphs at most.
+
+Your response has two fields:
+- `message`: what the client reads (your question, acknowledgement, or wrap-up).
+- `intake_complete`: set this to true ONLY on your final wrap-up turn — when you
+  have a useful picture (or have already asked 6 questions), you are summarising
+  what you understood, and you are letting the client know a lawyer will review
+  their case. On every other turn it MUST be false.
 """
 
 # --- Tone of voice -----------------------------------------------------------
@@ -147,6 +154,17 @@ def media_type_for(filename: str) -> str:
     return _MEDIA_TYPES.get(ext, "application/octet-stream")
 
 
+class IntakeReply(BaseModel):
+    """Structured turn output: the visible message plus a completion flag."""
+
+    message: str = Field(description="The message shown to the client.")
+    intake_complete: bool = Field(
+        default=False,
+        description="True only on the final wrap-up turn, once enough has been "
+        "gathered; false on every other turn.",
+    )
+
+
 @dataclass
 class Deps:
     """Per-run dependencies — carries the chosen tone into the agent."""
@@ -168,7 +186,9 @@ class IntakeAgent:
         # bearer token rather than a standard Anthropic API key.
         client = AsyncAnthropic(base_url=GATEWAY_BASE_URL, auth_token=GATEWAY_TOKEN)
         model = AnthropicModel(MODEL, provider=AnthropicProvider(anthropic_client=client))
-        self.agent = Agent(model, deps_type=Deps, system_prompt=SYSTEM_PROMPT)
+        self.agent = Agent(
+            model, deps_type=Deps, output_type=IntakeReply, system_prompt=SYSTEM_PROMPT
+        )
         self.sessions: dict[str, Session] = {}
 
         # Dynamic instruction: inject the chosen tone on every request so it
@@ -182,7 +202,7 @@ class IntakeAgent:
             self.sessions[session_id] = Session()
         return self.sessions[session_id]
 
-    async def _run(self, session: Session, prompt) -> str:
+    async def _run(self, session: Session, prompt) -> IntakeReply:
         """Run one turn through the agent with backoff on 429 rate limits."""
         deps = Deps(tone_guidance=TONES.get(session.tone, TONES[DEFAULT_TONE])["guidance"])
         delays = [2, 8, 20]
@@ -192,17 +212,22 @@ class IntakeAgent:
                     prompt, message_history=session.messages, deps=deps
                 )
                 session.messages = result.all_messages()
-                return result.output.strip()
+                reply = result.output
+                reply.message = reply.message.strip()
+                return reply
             except ModelHTTPError as exc:
                 if exc.status_code != 429:
                     raise
                 if attempt == len(delays):
                     # Quota (often the free-tier daily cap) is exhausted: degrade
                     # gracefully instead of surfacing a raw error to the client.
-                    return (
-                        "I'm receiving a lot of requests right now and have hit a "
-                        "temporary usage limit. Please try again in a little while — "
-                        "your conversation so far has been saved."
+                    return IntakeReply(
+                        message=(
+                            "I'm receiving a lot of requests right now and have hit "
+                            "a temporary usage limit. Please try again in a little "
+                            "while — your conversation so far has been saved."
+                        ),
+                        intake_complete=False,
                     )
                 await asyncio.sleep(delays[attempt])
 
