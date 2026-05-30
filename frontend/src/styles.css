@@ -383,11 +383,199 @@ body {
 }
 .done-files { margin-top: 22px; }
 
-@media (max-width: 640px) {
+/* Case file (Dossier) view */
+.dossier-screen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.dossier-back { right: auto; left: 16px; }
+.dossier {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 16px 48px;
+}
+.dossier > * {
+  max-width: var(--max);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Synthesis header */
+.case-header {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 22px 22px 18px;
+  margin-bottom: 28px;
+  animation: rise 0.35s ease both;
+}
+.case-type {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.case-summary {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text);
+  margin: 8px 0 4px;
+}
+.case-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px 32px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.fact-block { min-width: 0; }
+.fact-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.fact-value { font-size: 15px; font-weight: 600; }
+.fact-value.deadline { color: #a14a2f; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  font-size: 13px;
+  background: var(--bubble);
+  border-radius: 999px;
+  padding: 4px 11px;
+}
+
+/* Timeline — central spine, cards alternating left/right */
+.timeline {
+  position: relative;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 8px 0 48px;
+}
+.timeline::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  background: var(--line);
+  transform: translateX(-50%);
+}
+.tl-item {
+  position: relative;
+  width: 50%;
+  box-sizing: border-box;
+  padding: 12px 40px;
+  margin-bottom: 6px;
+}
+.tl-item:nth-child(odd) { left: 0; }
+.tl-item:nth-child(even) { left: 50%; }
+
+/* Node on the central spine, coloured by category */
+.tl-node {
+  position: absolute;
+  top: 26px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #8a857c;
+  box-shadow: 0 0 0 4px var(--bg);
+  z-index: 1;
+}
+.tl-item:nth-child(odd) .tl-node { right: -7px; }
+.tl-item:nth-child(even) .tl-node { left: -7px; }
+
+/* Event card */
+.tl-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 8px 24px rgba(0, 0, 0, 0.05);
+  transition: transform 0.12s ease, box-shadow 0.15s ease;
+  animation: rise 0.3s ease both;
+}
+.tl-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.09);
+}
+.tl-date {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tl-title { font-size: 15px; font-weight: 700; line-height: 1.4; margin-top: 3px; }
+.tl-desc { font-size: 13.5px; line-height: 1.55; color: #514c43; margin: 6px 0 0; }
+.tl-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+
+/* Clickable document */
+.tl-doc {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  margin-top: 11px;
+  padding: 6px 11px;
+  border-radius: 9px;
+  background: #eef3f8;
+  border: 1px solid #dde7f1;
+  color: #2f5a8a;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.tl-doc:hover { background: #e2edf7; border-color: #c7d8e8; }
+.tl-doc svg { flex: none; }
+.tl-doc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Badges (rare, meaningful flags only) */
+.badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+.badge.disputed { background: #fbeae5; color: #a14a2f; }
+.badge.deadline { background: #fdf3df; color: #8a6d1f; }
+
+/* Node colours per category */
+.tl-node.cat-agreement,
+.tl-node.cat-decision { background: #2f6b4f; }
+.tl-node.cat-payment,
+.tl-node.cat-legal_action { background: #2f5a8a; }
+.tl-node.cat-communication { background: #6b4f8a; }
+.tl-node.cat-breach,
+.tl-node.cat-complaint,
+.tl-node.cat-incident { background: #a14a2f; }
+.tl-node.cat-notice,
+.tl-node.cat-deadline { background: #8a6d1f; }
+
+@media (max-width: 720px) {
   .tone-grid { grid-template-columns: 1fr; }
   .tone-title { font-size: 24px; }
   .domain-badge { display: none; }
   .finish-btn { right: 12px; padding: 0 10px; font-size: 12px; }
+  .dossier-back { left: 12px; }
+
+  /* Single column: spine on the left, all cards to the right */
+  .timeline::before { left: 7px; }
+  .tl-item,
+  .tl-item:nth-child(odd),
+  .tl-item:nth-child(even) {
+    width: 100%;
+    left: 0;
+    padding: 10px 0 10px 30px;
+  }
+  .tl-item:nth-child(odd) .tl-node,
+  .tl-item:nth-child(even) .tl-node { left: 1px; right: auto; }
 }
 
 /* Scrollbar */

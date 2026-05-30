@@ -6,8 +6,9 @@ import os
 import re
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 load_dotenv()
@@ -65,6 +66,32 @@ async def upload(session_id: str = Form(...), files: list[UploadFile] = File(...
     return {"reply": r.message, "done": r.intake_complete, "files": [name for name, _ in payload]}
 
 
+class DossierRequest(BaseModel):
+    session_id: str
+
+
+@app.post("/api/dossier")
+async def dossier(req: DossierRequest):
+    """Extract the structured case file (synthesis + timeline) for a session."""
+    case = await agent.build_case_file(req.session_id)
+    return case.model_dump(mode="json")
+
+
+@app.get("/api/document")
+def document(session_id: str, name: str):
+    """Serve an uploaded document inline, so a timeline card can open it."""
+    found = agent.get_document(session_id, name)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    data, media_type = found
+    filename = os.path.basename(name)
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
 @app.post("/api/documents")
 async def documents(session_id: str = Form(...), files: list[UploadFile] = File(...)):
     """Store uploaded documents on disk for later processing (no AI here)."""
@@ -73,6 +100,7 @@ async def documents(session_id: str = Form(...), files: list[UploadFile] = File(
     os.makedirs(dest, exist_ok=True)
 
     stored = []
+    payload = []
     for f in files:
         name = os.path.basename(f.filename or "document")
         path = os.path.join(dest, name)
@@ -83,9 +111,14 @@ async def documents(session_id: str = Form(...), files: list[UploadFile] = File(
             name = f"{base}_{n}{ext}"
             path = os.path.join(dest, name)
             n += 1
+        data = await f.read()
         with open(path, "wb") as out:
-            out.write(await f.read())
+            out.write(data)
         stored.append(name)
+        payload.append((name, data))
+
+    # Also attach to the session so the case-file extractor can read them.
+    agent.register_documents(session_id, payload)
 
     return {"stored": stored, "count": len(stored), "dir": f"uploads/{safe}"}
 

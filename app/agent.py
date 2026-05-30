@@ -25,6 +25,8 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
+from .timeline import CaseFile
+
 # The app talks to the Lawhive hackathon AI gateway, an Anthropic-compatible
 # proxy that serves Claude (via Vertex). Configured through environment vars.
 GATEWAY_BASE_URL = os.environ.get("LAWHIVE_AI_BASE_URL", "https://ai.hack.lawhive.co.uk")
@@ -76,6 +78,46 @@ Your response has two fields:
   have a useful picture (or have already asked 6 questions), you are summarising
   what you understood, and you are letting the client know a lawyer will review
   their case. On every other turn it MUST be false.
+"""
+
+# --- Case file extraction ----------------------------------------------------
+
+EXTRACTION_PROMPT = """\
+You build a structured case file for a UK lawyer from a completed intake: the
+conversation transcript plus any documents the client uploaded. You do not give
+legal advice — you organise the facts so a lawyer gets a clear snapshot.
+
+Produce:
+- matter_type: the type of dispute in a few words (e.g. "Unfair dismissal /
+  redundancy", "Consumer Rights Act — faulty car", "Flight delay compensation").
+- summary: 2-3 neutral sentences describing the situation.
+- parties: each person/organisation involved, with their role (client, employer,
+  garage, airline, landlord, etc.).
+- amount_in_dispute: the headline sum at stake, only if there is one.
+- next_deadline: the most pressing upcoming deadline or date (appeal window,
+  court date, limitation), only if one exists. Use a short label.
+- events: the chronological timeline. Extract EVERY dated fact — one event per
+  distinct fact. A single document often yields many events.
+
+For each event:
+- date: the normalised ISO date (YYYY-MM-DD), used for sorting. Resolve relative
+  dates ("last week", "today") using nearby dates in the transcript/documents as
+  an anchor. If only a month or year is known, use the first of that month/year.
+  Set null only when the date is genuinely unknown.
+- date_text: the date exactly as stated ("last week", "Feb 2024", "27 May 2026").
+- title: what happened, as a short headline (a few words).
+- detail: one short sentence describing the event in plain English. Always
+  provide one — it is the description shown on the timeline card.
+- category: one of agreement, payment, communication, breach, notice, complaint,
+  legal_action, decision, deadline, incident, other.
+- parties: who was involved in this event.
+- amount: only when money is the subject of the event.
+- source: the document filename it came from, or "Conversation".
+- disputed: true when the fact is contested between the parties.
+- is_deadline: true for a future deadline / date not to miss.
+
+Rules: never invent facts; if unsure, omit. Only include fields that carry real
+meaning — do not pad. Be exhaustive about events but precise about each one.
 """
 
 # --- Tone of voice -----------------------------------------------------------
@@ -178,6 +220,10 @@ class Session:
 
     messages: list[ModelMessage] = field(default_factory=list)
     tone: str = DEFAULT_TONE
+    # Clean text transcript (role, text) and the raw bytes of uploaded documents,
+    # both fed to the extractor when building the case file.
+    transcript: list[tuple[str, str]] = field(default_factory=list)
+    documents: list[tuple[str, bytes]] = field(default_factory=list)
 
 
 class IntakeAgent:
@@ -189,6 +235,8 @@ class IntakeAgent:
         self.agent = Agent(
             model, deps_type=Deps, output_type=IntakeReply, system_prompt=SYSTEM_PROMPT
         )
+        # Separate agent that turns a finished intake into a structured CaseFile.
+        self.extractor = Agent(model, output_type=CaseFile, system_prompt=EXTRACTION_PROMPT)
         self.sessions: dict[str, Session] = {}
 
         # Dynamic instruction: inject the chosen tone on every request so it
@@ -237,11 +285,19 @@ class IntakeAgent:
         """Produce the agent's opening message using the chosen tone."""
         session = self._session(session_id)
         session.messages = []
+        session.transcript = []
+        session.documents = []
         session.tone = tone if tone in TONES else DEFAULT_TONE
-        return await self._run(session, "Please begin the intake conversation.")
+        reply = await self._run(session, "Please begin the intake conversation.")
+        session.transcript.append(("Assistant", reply.message))
+        return reply
 
     async def chat(self, session_id: str, message: str) -> str:
-        return await self._run(self._session(session_id), message)
+        session = self._session(session_id)
+        session.transcript.append(("Client", message))
+        reply = await self._run(session, message)
+        session.transcript.append(("Assistant", reply.message))
+        return reply
 
     # --- Documents -----------------------------------------------------------
 
@@ -253,7 +309,9 @@ class IntakeAgent:
         acknowledges what it saw and asks about anything still missing.
         """
         session = self._session(session_id)
+        session.documents.extend(files)
         names = ", ".join(name for name, _ in files)
+        session.transcript.append(("Client", f"[Uploaded documents: {names}]"))
         prompt: list = [
             f"The client uploaded the following document(s) as evidence: {names}. "
             "Read them, briefly acknowledge the key facts a lawyer would care about "
@@ -261,4 +319,59 @@ class IntakeAgent:
         ]
         for name, data in files:
             prompt.append(BinaryContent(data=data, media_type=media_type_for(name)))
-        return await self._run(session, prompt)
+        reply = await self._run(session, prompt)
+        session.transcript.append(("Assistant", reply.message))
+        return reply
+
+    def register_documents(self, session_id: str, files: list[tuple[str, bytes]]) -> None:
+        """Attach documents to the session for extraction, without an AI turn.
+
+        Used by the final upload screen, which stores files on disk; we also keep
+        the bytes here so the case-file extractor can read them.
+        """
+        self._session(session_id).documents.extend(files)
+
+    def get_document(self, session_id: str, name: str) -> tuple[bytes, str] | None:
+        """Return (bytes, media_type) for an uploaded document, or None.
+
+        Matches on the full name first, then on the basename, so a timeline
+        event's `source` resolves even if the path differs slightly.
+        """
+        session = self.sessions.get(session_id)
+        if session is None:
+            return None
+        base = os.path.basename(name)
+        for fname, data in session.documents:
+            if fname == name or os.path.basename(fname) == base:
+                return data, media_type_for(fname)
+        return None
+
+    # --- Case file -----------------------------------------------------------
+
+    async def build_case_file(self, session_id: str) -> CaseFile:
+        """Extract a structured, chronologically-ordered case file from a session.
+
+        Feeds the clean transcript plus the raw uploaded documents to the
+        extractor agent, which returns a validated `CaseFile`; events are then
+        sorted oldest-first (undated last).
+        """
+        session = self._session(session_id)
+        transcript = "\n".join(f"{role}: {text}" for role, text in session.transcript)
+        prompt: list = [
+            "Build the case file from this completed intake.\n\n"
+            f"=== Conversation transcript ===\n{transcript}\n\n"
+            "=== Uploaded documents follow (if any) ==="
+        ]
+        for name, data in session.documents:
+            prompt.append(f"Document: {name}")
+            prompt.append(BinaryContent(data=data, media_type=media_type_for(name)))
+
+        delays = [2, 8, 20]
+        for attempt in range(len(delays) + 1):
+            try:
+                result = await self.extractor.run(prompt)
+                return result.output.sorted()
+            except ModelHTTPError as exc:
+                if exc.status_code != 429 or attempt == len(delays):
+                    raise
+                await asyncio.sleep(delays[attempt])
