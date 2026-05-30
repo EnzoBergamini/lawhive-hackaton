@@ -21,7 +21,8 @@ function formatSize(bytes) {
 }
 
 export default function App() {
-  const [phase, setPhase] = useState("tone"); // "tone" | "domain" | "chat" | "upload" | "done"
+  const [phase, setPhase] = useState("welcome"); // welcome | tone | domain | chat | upload | done | dossier
+  const [name, setName] = useState("");
   const [tones, setTones] = useState([]);
   const [tone, setTone] = useState(null);
   const [domain, setDomain] = useState(null);
@@ -36,7 +37,6 @@ export default function App() {
   const [assessment, setAssessment] = useState(null); // null = not loaded yet
   const [assessmentLoading, setAssessmentLoading] = useState(false);
   const scrollRef = useRef(null);
-  const fileRef = useRef(null);
   const taRef = useRef(null);
 
   // Load the available tones for the selection screen.
@@ -79,7 +79,7 @@ export default function App() {
       const res = await fetch("/api/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, tone }),
+        body: JSON.stringify({ session_id: sessionId, tone, name }),
       });
       const data = await res.json();
       setMessages([{ role: "agent", text: data.reply }]);
@@ -111,27 +111,6 @@ export default function App() {
       if (data.done) setTimeout(() => setPhase("upload"), 1400);
     } catch {
       setMessages((m) => [...m, { role: "agent", text: "Something went wrong. Please try again." }]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // Inline attach (during the chat).
-  async function uploadInline(files) {
-    if (!files.length || busy) return;
-    setStarted(true);
-    const names = [...files].map((f) => f.name).join(", ");
-    setMessages((m) => [...m, { role: "user", text: `📎 ${names}`, file: true }]);
-    setBusy(true);
-    const form = new FormData();
-    form.append("session_id", sessionId);
-    for (const f of files) form.append("files", f);
-    try {
-      const res = await fetch("/api/upload", { method: "POST", body: form });
-      const data = await res.json();
-      setMessages((m) => [...m, { role: "agent", text: data.reply }]);
-    } catch {
-      setMessages((m) => [...m, { role: "agent", text: "Upload failed. Please try again." }]);
     } finally {
       setBusy(false);
     }
@@ -216,6 +195,15 @@ export default function App() {
     }
   }
 
+  if (phase === "welcome") {
+    return (
+      <WelcomeScreen
+        name={name}
+        onChange={setName}
+        onContinue={() => setPhase("tone")}
+      />
+    );
+  }
   if (phase === "tone") {
     return <ToneScreen tones={tones} onChoose={chooseTone} disabled={busy} />;
   }
@@ -278,14 +266,6 @@ export default function App() {
 
       <footer className="composer-wrap">
         <div className="composer">
-          <button
-            className="attach"
-            title="Attach documents"
-            disabled={busy}
-            onClick={() => fileRef.current?.click()}
-          >
-            <PaperclipIcon />
-          </button>
           <textarea
             ref={taRef}
             value={input}
@@ -300,22 +280,93 @@ export default function App() {
           <button className="send" onClick={send} disabled={busy || !input.trim()}>
             <ArrowUpIcon />
           </button>
+        </div>
+        <DisclaimerFooter />
+      </footer>
+    </div>
+  );
+}
+
+function DisclaimerFooter() {
+  return (
+    <p className="global-disclaimer">
+      Clearfile provides general legal information to help you understand and organise your
+      situation. It is not a law firm and does not provide regulated legal advice. Clearfile can
+      make mistakes — always check anything important with a qualified solicitor or a free service
+      such as Citizens Advice, Shelter, or the relevant ombudsman before you act, sign, or file.
+      Using Clearfile does not create a solicitor–client relationship.
+    </p>
+  );
+}
+
+function WelcomeScreen({ name, onChange, onContinue }) {
+  const ready = name.trim().length > 0;
+  return (
+    <div className="tone-screen">
+      <div className="tone-inner welcome-inner">
+        <span className="brand center">
+          <span className="dot" />
+          CLEARFILE
+        </span>
+        <h1 className="tone-title">Before you start — please read this</h1>
+
+        <div className="disclaimer-body">
+          <p>
+            Clearfile is a tool that helps you understand your situation, organise your documents
+            into a timeline, and prepare draft letters and next steps. It is not a law firm, it is
+            not your solicitor, and it does not provide regulated legal advice.
+          </p>
+          <p>
+            The information and documents Clearfile produces are a starting point, not a final legal
+            opinion. Clearfile uses AI and can make mistakes, including about the law, deadlines, and
+            your specific circumstances. Time limits in legal matters are strict and missing one can
+            permanently affect your rights — always confirm any deadline with a qualified adviser.
+          </p>
+          <p>
+            Before you send a letter, sign a form, or start a claim, have your case checked by a
+            qualified solicitor or a free service such as Citizens Advice, Shelter, or the relevant
+            ombudsman. Clearfile can help you pass everything you've prepared to a lawyer.
+          </p>
+          <p>
+            You upload your documents and information yourself, and you remain responsible for
+            deciding what to do. Using Clearfile does not create a solicitor–client relationship.
+          </p>
+          <p>
+            Your documents may include sensitive personal information. We process it only to help
+            with your case and keep each case private and separate.{" "}
+            <a href="#" className="privacy-link">
+              Privacy notice
+            </a>
+            .
+          </p>
+        </div>
+
+        <div className="name-field">
+          <label className="name-label" htmlFor="client-name">
+            Your name
+          </label>
           <input
-            ref={fileRef}
-            type="file"
-            multiple
-            hidden
-            accept={ACCEPT}
-            onChange={(e) => {
-              uploadInline(e.target.files);
-              e.target.value = "";
+            id="client-name"
+            className="name-input"
+            type="text"
+            value={name}
+            placeholder="e.g. Jamie Watson"
+            autoComplete="name"
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && name.trim()) onContinue();
             }}
           />
         </div>
-        <p className="disclaimer">
-          CLEARFILE gathers information for a lawyer. It does not provide legal advice.
-        </p>
-      </footer>
+
+        <div className="upload-actions">
+          <button className="primary-btn" onClick={onContinue} disabled={!ready}>
+            I understand — Continue
+          </button>
+        </div>
+
+        <DisclaimerFooter />
+      </div>
     </div>
   );
 }
@@ -346,6 +397,7 @@ function ToneScreen({ tones, onChoose, disabled }) {
             </button>
           ))}
         </div>
+        <DisclaimerFooter />
       </div>
     </div>
   );
@@ -375,6 +427,7 @@ function DomainScreen({ onChoose, disabled }) {
             </button>
           ))}
         </div>
+        <DisclaimerFooter />
       </div>
     </div>
   );
@@ -482,6 +535,7 @@ function UploadScreen({ pending, onAdd, onRemove, onSubmit, onBack, busy, messag
               : "Skip & send to a lawyer"}
           </button>
         </div>
+        <DisclaimerFooter />
       </div>
     </div>
   );
@@ -513,6 +567,7 @@ function DoneScreen({ result, onShowDossier, loading }) {
             {loading ? "Building case file…" : "View case file →"}
           </button>
         </div>
+        <DisclaimerFooter />
       </div>
     </div>
   );
@@ -632,6 +687,8 @@ function DossierScreen({ data, assessment, assessmentLoading, onBack }) {
             <p className="tone-sub">No dated events were found.</p>
           )}
         </section>
+
+        <DisclaimerFooter />
       </main>
     </div>
   );

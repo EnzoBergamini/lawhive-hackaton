@@ -247,6 +247,7 @@ class Session:
 
     messages: list[ModelMessage] = field(default_factory=list)
     tone: str = DEFAULT_TONE
+    name: str | None = None
     # Clean text transcript (role, text) and the raw bytes of uploaded documents,
     # both fed to the extractor when building the case file.
     transcript: list[tuple[str, str]] = field(default_factory=list)
@@ -313,15 +314,26 @@ class IntakeAgent:
 
     # --- Chat ----------------------------------------------------------------
 
-    async def start(self, session_id: str, tone: str | None = None) -> str:
-        """Produce the agent's opening message using the chosen tone."""
+    async def start(
+        self, session_id: str, tone: str | None = None, name: str | None = None
+    ) -> str:
+        """Produce the agent's opening message using the chosen tone and name."""
         session = self._session(session_id)
         session.messages = []
         session.transcript = []
         session.documents = []
         session.case_file = None
         session.tone = tone if tone in TONES else DEFAULT_TONE
-        reply = await self._run(session, "Please begin the intake conversation.")
+        session.name = (name or "").strip() or None
+        kickoff = "Please begin the intake conversation."
+        if session.name:
+            kickoff += (
+                f" The client's name is {session.name} — greet them warmly by "
+                "their first name in your opening sentence."
+            )
+            # Record the name so it flows into the case file too.
+            session.transcript.append(("Client", f"My name is {session.name}."))
+        reply = await self._run(session, kickoff)
         session.transcript.append(("Assistant", reply.message))
         return reply
 
