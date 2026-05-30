@@ -489,20 +489,6 @@ function DoneScreen({ result, onShowDossier, loading }) {
 
 // --- Case file (synthesis header + chronological timeline) ------------------
 
-const CATEGORY_LABELS = {
-  agreement: "Agreement",
-  payment: "Payment",
-  communication: "Communication",
-  breach: "Breach",
-  notice: "Notice",
-  complaint: "Complaint",
-  legal_action: "Legal action",
-  decision: "Decision",
-  deadline: "Deadline",
-  incident: "Incident",
-  other: "Event",
-};
-
 function formatMoney(m) {
   if (!m) return null;
   try {
@@ -598,31 +584,42 @@ function DossierScreen({ data, onBack }) {
   );
 }
 
+function docUrl(source) {
+  return `/api/document?session_id=${encodeURIComponent(sessionId)}&name=${encodeURIComponent(source)}`;
+}
+
 function TimelineItem({ event: e }) {
-  const amount = formatMoney(e.amount);
+  const hasDoc = e.source && e.source !== "Conversation";
   return (
     <div className="tl-item">
-      <div className="tl-rail">
-        <span className="tl-dot" />
-      </div>
-      <div className="tl-body">
+      <span className={"tl-node cat-" + e.category} />
+      <div className="tl-card">
         <div className="tl-date">{e.date_text || "Date unknown"}</div>
         <div className="tl-title">{e.title}</div>
-        {e.detail && <div className="tl-detail">{e.detail}</div>}
-        <div className="tl-meta">
-          <span className={"badge cat-" + e.category}>
-            {CATEGORY_LABELS[e.category] || "Event"}
-          </span>
-          {e.disputed && <span className="badge disputed">Disputed</span>}
-          {e.is_deadline && <span className="badge deadline">Deadline</span>}
-          {amount && <span className="tl-amount">{amount}</span>}
-          {e.parties?.length > 0 && (
-            <span className="tl-parties">{e.parties.join(", ")}</span>
-          )}
-          {e.source && <span className="tl-source">{e.source}</span>}
-        </div>
+        {e.detail && <p className="tl-desc">{e.detail}</p>}
+        {(e.disputed || e.is_deadline) && (
+          <div className="tl-tags">
+            {e.disputed && <span className="badge disputed">Disputed</span>}
+            {e.is_deadline && <span className="badge deadline">Deadline</span>}
+          </div>
+        )}
+        {hasDoc && (
+          <a className="tl-doc" href={docUrl(e.source)} target="_blank" rel="noreferrer">
+            <DocIcon />
+            <span className="tl-doc-name">{e.source}</span>
+          </a>
+        )}
       </div>
     </div>
+  );
+}
+
+function DocIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+    </svg>
   );
 }
 

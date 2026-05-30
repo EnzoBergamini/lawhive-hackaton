@@ -105,8 +105,9 @@ For each event:
   an anchor. If only a month or year is known, use the first of that month/year.
   Set null only when the date is genuinely unknown.
 - date_text: the date exactly as stated ("last week", "Feb 2024", "27 May 2026").
-- title: what happened, one clear sentence.
-- detail: short extra context, ONLY when it adds real meaning — otherwise null.
+- title: what happened, as a short headline (a few words).
+- detail: one short sentence describing the event in plain English. Always
+  provide one — it is the description shown on the timeline card.
 - category: one of agreement, payment, communication, breach, notice, complaint,
   legal_action, decision, deadline, incident, other.
 - parties: who was involved in this event.
@@ -329,6 +330,21 @@ class IntakeAgent:
         the bytes here so the case-file extractor can read them.
         """
         self._session(session_id).documents.extend(files)
+
+    def get_document(self, session_id: str, name: str) -> tuple[bytes, str] | None:
+        """Return (bytes, media_type) for an uploaded document, or None.
+
+        Matches on the full name first, then on the basename, so a timeline
+        event's `source` resolves even if the path differs slightly.
+        """
+        session = self.sessions.get(session_id)
+        if session is None:
+            return None
+        base = os.path.basename(name)
+        for fname, data in session.documents:
+            if fname == name or os.path.basename(fname) == base:
+                return data, media_type_for(fname)
+        return None
 
     # --- Case file -----------------------------------------------------------
 

@@ -6,8 +6,9 @@ import os
 import re
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 load_dotenv()
@@ -74,6 +75,21 @@ async def dossier(req: DossierRequest):
     """Extract the structured case file (synthesis + timeline) for a session."""
     case = await agent.build_case_file(req.session_id)
     return case.model_dump(mode="json")
+
+
+@app.get("/api/document")
+def document(session_id: str, name: str):
+    """Serve an uploaded document inline, so a timeline card can open it."""
+    found = agent.get_document(session_id, name)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    data, media_type = found
+    filename = os.path.basename(name)
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 @app.post("/api/documents")
