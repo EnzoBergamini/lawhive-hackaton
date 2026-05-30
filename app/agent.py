@@ -73,47 +73,54 @@ message concise — a couple of short paragraphs at most.
 
 # --- Tone of voice -----------------------------------------------------------
 
-# The 6 tones the client can pick before the interview starts. `label` and
-# `description` are shown on the selection screen; `guidance` steers the model.
+# The 5 modes the client can pick before the interview starts. They tailor how
+# the agent communicates for a legal context. `label` and `description` are
+# shown on the selection screen; `guidance` steers the model.
 TONES: dict[str, dict[str, str]] = {
-    "empathetic": {
-        "label": "Warm & empathetic",
-        "description": "Gentle and understanding — acknowledges how you feel.",
-        "guidance": "Adopt a warm, deeply empathetic tone. Acknowledge the "
-        "client's feelings, show you care, and use gentle, reassuring language.",
+    "plain_english": {
+        "label": "Plain English",
+        "description": "Everyday language, with the legal term in brackets so you can look it up.",
+        "guidance": "Communicate in plain, everyday English. Avoid legal jargon. "
+        "When a legal concept is genuinely unavoidable, explain it simply and put "
+        "the formal legal term in brackets so the client can look it up or quote "
+        "it — e.g. \"a written explanation of why you were dismissed (this is "
+        "called a 'statement of reasons')\".",
     },
-    "friendly": {
-        "label": "Friendly & casual",
-        "description": "Relaxed, conversational and approachable.",
-        "guidance": "Adopt a friendly, casual, conversational tone — like a "
-        "helpful person chatting. Stay relaxed and approachable, but respectful.",
+    "step_by_step": {
+        "label": "Step by Step",
+        "description": "A clear sequence — what's happened, your options, what to do first.",
+        "guidance": "Communicate as a clear, ordered sequence: what has happened, "
+        "what the options are, and what to do first. Take one logical step at a "
+        "time. Do not go into branching scenarios or 'it depends' tangents unless "
+        "the client asks. This suits clients who feel overwhelmed by complexity "
+        "or urgency.",
     },
-    "professional": {
-        "label": "Professional & formal",
-        "description": "Polished, precise and business-like.",
-        "guidance": "Adopt a professional, formal, business-like tone. Be "
-        "polished, precise and courteous, as a solicitor's office would be.",
+    "key_points": {
+        "label": "Just the Key Points",
+        "description": "A short bullet summary of what matters — rights, deadlines, risks.",
+        "guidance": "Communicate in a short bullet summary of only the most "
+        "important facts — rights, deadlines and risks — without explanation or "
+        "elaboration. Keep it scannable and minimal, for clients who find detail "
+        "distracting and just need to know what matters right now.",
     },
-    "reassuring": {
-        "label": "Calm & reassuring",
-        "description": "Steady and calming — eases your worry.",
-        "guidance": "Adopt a calm, reassuring tone. Keep the client at ease, "
-        "reduce anxiety, and convey steady confidence that they are in good hands.",
+    "full_detail": {
+        "label": "Full Detail",
+        "description": "Complete context, caveats, legal references and reasoning.",
+        "guidance": "Communicate with complete context: include relevant caveats, "
+        "the reasoning behind things, and legal references where helpful. Don't "
+        "leave gaps or ambiguity — err toward thoroughness over brevity, for "
+        "clients who find gaps or ambiguity more distressing than complexity.",
     },
-    "direct": {
-        "label": "Concise & direct",
-        "description": "Brief and to the point, no fluff.",
-        "guidance": "Adopt a concise, direct, efficient tone. Keep messages brief "
-        "and to the point with minimal small talk, while remaining polite.",
-    },
-    "supportive": {
-        "label": "Patient & supportive",
-        "description": "Encouraging and thorough — takes its time.",
-        "guidance": "Adopt a patient, supportive, encouraging tone. Take time to "
-        "make the client comfortable, encourage them to share, and never rush them.",
+    "check_as_we_go": {
+        "label": "Check As We Go",
+        "description": "One short question at a time, checking in as we go.",
+        "guidance": "Ask one short question at a time and confirm you have "
+        "understood the client's answer before moving on. Check in regularly and "
+        "keep each message small, for clients who find it hard to absorb a large "
+        "amount of information at once.",
     },
 }
-DEFAULT_TONE = "professional"
+DEFAULT_TONE = "plain_english"
 
 
 def tone_options() -> list[dict[str, str]]:
