@@ -2,9 +2,21 @@ import { useEffect, useRef, useState } from "react";
 
 const sessionId = "sess-" + Math.random().toString(36).slice(2);
 
+// Legal domains — purely visual; this choice does not change the agent's behaviour.
+const DOMAINS = [
+  { id: "housing", label: "Landlord–tenant / housing", icon: "🏠" },
+  { id: "consumer", label: "Consumer rights / contract", icon: "🧾" },
+  { id: "property", label: "Property", icon: "🏢" },
+  { id: "family", label: "Family", icon: "👨‍👩‍👧" },
+  { id: "immigration", label: "Immigration", icon: "🛂" },
+  { id: "business", label: "Small business", icon: "💼" },
+];
+
 export default function App() {
-  const [phase, setPhase] = useState("tone"); // "tone" | "chat"
+  const [phase, setPhase] = useState("tone"); // "tone" | "domain" | "chat"
   const [tones, setTones] = useState([]);
+  const [tone, setTone] = useState(null);
+  const [domain, setDomain] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -37,15 +49,23 @@ export default function App() {
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   };
 
-  async function chooseTone(toneId) {
+  // Step 1: tone chosen → go to the domain step.
+  function chooseTone(toneId) {
+    setTone(toneId);
+    setPhase("domain");
+  }
+
+  // Step 2: domain chosen (visual only) → start the conversation.
+  async function chooseDomain(d) {
     if (busy) return;
+    setDomain(d);
     setPhase("chat");
     setBusy(true);
     try {
       const res = await fetch("/api/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, tone: toneId }),
+        body: JSON.stringify({ session_id: sessionId, tone }),
       });
       const data = await res.json();
       setMessages([{ role: "agent", text: data.reply }]);
@@ -110,6 +130,10 @@ export default function App() {
     return <ToneScreen tones={tones} onChoose={chooseTone} disabled={busy} />;
   }
 
+  if (phase === "domain") {
+    return <DomainScreen onChoose={chooseDomain} disabled={busy} />;
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -117,6 +141,12 @@ export default function App() {
           <span className="dot" />
           Intake Agent
         </div>
+        {domain && (
+          <span className="domain-badge">
+            <span className="badge-icon">{domain.icon}</span>
+            {domain.label}
+          </span>
+        )}
       </header>
 
       <main className="conversation" ref={scrollRef}>
@@ -180,6 +210,7 @@ function ToneScreen({ tones, onChoose, disabled }) {
           <span className="dot" />
           Intake Agent
         </span>
+        <div className="step-hint">Step 1 of 2</div>
         <h1 className="tone-title">How would you like me to talk with you?</h1>
         <p className="tone-sub">
           Choose a tone of voice for the assistant that will ask you questions.
@@ -194,6 +225,37 @@ function ToneScreen({ tones, onChoose, disabled }) {
             >
               <span className="tone-label">{t.label}</span>
               <span className="tone-desc">{t.description}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DomainScreen({ onChoose, disabled }) {
+  return (
+    <div className="tone-screen">
+      <div className="tone-inner">
+        <span className="brand center">
+          <span className="dot" />
+          Intake Agent
+        </span>
+        <div className="step-hint">Step 2 of 2</div>
+        <h1 className="tone-title">What area of law does this relate to?</h1>
+        <p className="tone-sub">
+          Pick the area that best fits your situation.
+        </p>
+        <div className="tone-grid domain-grid">
+          {DOMAINS.map((d) => (
+            <button
+              key={d.id}
+              className="tone-card domain-card"
+              disabled={disabled}
+              onClick={() => onChoose(d)}
+            >
+              <span className="domain-icon">{d.icon}</span>
+              <span className="tone-label">{d.label}</span>
             </button>
           ))}
         </div>
