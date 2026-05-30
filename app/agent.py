@@ -1,10 +1,11 @@
-"""Intake Agent powered by Gemini via pydantic-ai.
+"""Intake Agent powered by Claude (via the Lawhive gateway) and pydantic-ai.
 
 The agent runs a guided conversation with a prospective client:
-  1. It first asks what the legal issue is.
-  2. From the client's description it asks targeted follow-up questions, one at
+  1. The client first picks a tone of voice for the agent.
+  2. It asks what the legal issue is.
+  3. From the client's description it asks targeted follow-up questions, one at
      a time, to gather everything a lawyer needs to assess the case.
-  3. At any point the client can upload documents; the agent reads them and
+  4. At any point the client can upload documents; the agent reads them and
      folds the findings into the case.
 
 The aim is to give a lawyer a clear picture of the matter.
@@ -17,7 +18,7 @@ import os
 from dataclasses import dataclass, field
 
 from anthropic import AsyncAnthropic
-from pydantic_ai import Agent, BinaryContent
+from pydantic_ai import Agent, BinaryContent, RunContext
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.anthropic import AnthropicModel
@@ -70,7 +71,60 @@ Never invent facts. If something is unknown, leave it for the lawyer. Keep every
 message concise — a couple of short paragraphs at most.
 """
 
-# Map file extensions to the media types Gemini understands.
+# --- Tone of voice -----------------------------------------------------------
+
+# The 6 tones the client can pick before the interview starts. `label` and
+# `description` are shown on the selection screen; `guidance` steers the model.
+TONES: dict[str, dict[str, str]] = {
+    "empathetic": {
+        "label": "Warm & empathetic",
+        "description": "Gentle and understanding — acknowledges how you feel.",
+        "guidance": "Adopt a warm, deeply empathetic tone. Acknowledge the "
+        "client's feelings, show you care, and use gentle, reassuring language.",
+    },
+    "friendly": {
+        "label": "Friendly & casual",
+        "description": "Relaxed, conversational and approachable.",
+        "guidance": "Adopt a friendly, casual, conversational tone — like a "
+        "helpful person chatting. Stay relaxed and approachable, but respectful.",
+    },
+    "professional": {
+        "label": "Professional & formal",
+        "description": "Polished, precise and business-like.",
+        "guidance": "Adopt a professional, formal, business-like tone. Be "
+        "polished, precise and courteous, as a solicitor's office would be.",
+    },
+    "reassuring": {
+        "label": "Calm & reassuring",
+        "description": "Steady and calming — eases your worry.",
+        "guidance": "Adopt a calm, reassuring tone. Keep the client at ease, "
+        "reduce anxiety, and convey steady confidence that they are in good hands.",
+    },
+    "direct": {
+        "label": "Concise & direct",
+        "description": "Brief and to the point, no fluff.",
+        "guidance": "Adopt a concise, direct, efficient tone. Keep messages brief "
+        "and to the point with minimal small talk, while remaining polite.",
+    },
+    "supportive": {
+        "label": "Patient & supportive",
+        "description": "Encouraging and thorough — takes its time.",
+        "guidance": "Adopt a patient, supportive, encouraging tone. Take time to "
+        "make the client comfortable, encourage them to share, and never rush them.",
+    },
+}
+DEFAULT_TONE = "professional"
+
+
+def tone_options() -> list[dict[str, str]]:
+    """The tone catalogue for the selection screen (no model guidance)."""
+    return [
+        {"id": tid, "label": t["label"], "description": t["description"]}
+        for tid, t in TONES.items()
+    ]
+
+
+# Map file extensions to the media types the model understands.
 _MEDIA_TYPES = {
     ".pdf": "application/pdf",
     ".png": "image/png",
@@ -87,10 +141,18 @@ def media_type_for(filename: str) -> str:
 
 
 @dataclass
+class Deps:
+    """Per-run dependencies — carries the chosen tone into the agent."""
+
+    tone_guidance: str
+
+
+@dataclass
 class Session:
     """In-memory state for one client conversation."""
 
     messages: list[ModelMessage] = field(default_factory=list)
+    tone: str = DEFAULT_TONE
 
 
 class IntakeAgent:
@@ -99,8 +161,14 @@ class IntakeAgent:
         # bearer token rather than a standard Anthropic API key.
         client = AsyncAnthropic(base_url=GATEWAY_BASE_URL, auth_token=GATEWAY_TOKEN)
         model = AnthropicModel(MODEL, provider=AnthropicProvider(anthropic_client=client))
-        self.agent = Agent(model, system_prompt=SYSTEM_PROMPT)
+        self.agent = Agent(model, deps_type=Deps, system_prompt=SYSTEM_PROMPT)
         self.sessions: dict[str, Session] = {}
+
+        # Dynamic instruction: inject the chosen tone on every request so it
+        # applies consistently across the whole conversation.
+        @self.agent.instructions
+        def _tone(ctx: RunContext[Deps]) -> str:
+            return ctx.deps.tone_guidance
 
     def _session(self, session_id: str) -> Session:
         if session_id not in self.sessions:
@@ -109,10 +177,13 @@ class IntakeAgent:
 
     async def _run(self, session: Session, prompt) -> str:
         """Run one turn through the agent with backoff on 429 rate limits."""
+        deps = Deps(tone_guidance=TONES.get(session.tone, TONES[DEFAULT_TONE])["guidance"])
         delays = [2, 8, 20]
         for attempt in range(len(delays) + 1):
             try:
-                result = await self.agent.run(prompt, message_history=session.messages)
+                result = await self.agent.run(
+                    prompt, message_history=session.messages, deps=deps
+                )
                 session.messages = result.all_messages()
                 return result.output.strip()
             except ModelHTTPError as exc:
@@ -130,10 +201,11 @@ class IntakeAgent:
 
     # --- Chat ----------------------------------------------------------------
 
-    async def start(self, session_id: str) -> str:
-        """Produce the agent's opening message."""
+    async def start(self, session_id: str, tone: str | None = None) -> str:
+        """Produce the agent's opening message using the chosen tone."""
         session = self._session(session_id)
         session.messages = []
+        session.tone = tone if tone in TONES else DEFAULT_TONE
         return await self._run(session, "Please begin the intake conversation.")
 
     async def chat(self, session_id: str, message: str) -> str:

@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 const sessionId = "sess-" + Math.random().toString(36).slice(2);
 
 export default function App() {
+  const [phase, setPhase] = useState("tone"); // "tone" | "chat"
+  const [tones, setTones] = useState([]);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -11,24 +13,15 @@ export default function App() {
   const fileRef = useRef(null);
   const taRef = useRef(null);
 
-  // Kick off the conversation once on load.
+  // Load the available tones for the selection screen.
   useEffect(() => {
     (async () => {
-      setBusy(true);
       try {
-        const res = await fetch("/api/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId }),
-        });
+        const res = await fetch("/api/tones");
         const data = await res.json();
-        setMessages([{ role: "agent", text: data.reply }]);
+        setTones(data.tones || []);
       } catch {
-        setMessages([
-          { role: "agent", text: "I couldn't connect. Is the server running?" },
-        ]);
-      } finally {
-        setBusy(false);
+        setTones([]);
       }
     })();
   }, []);
@@ -43,6 +36,25 @@ export default function App() {
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   };
+
+  async function chooseTone(toneId) {
+    if (busy) return;
+    setPhase("chat");
+    setBusy(true);
+    try {
+      const res = await fetch("/api/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, tone: toneId }),
+      });
+      const data = await res.json();
+      setMessages([{ role: "agent", text: data.reply }]);
+    } catch {
+      setMessages([{ role: "agent", text: "I couldn't connect. Is the server running?" }]);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function send() {
     const text = input.trim();
@@ -92,6 +104,10 @@ export default function App() {
       e.preventDefault();
       send();
     }
+  }
+
+  if (phase === "tone") {
+    return <ToneScreen tones={tones} onChoose={chooseTone} disabled={busy} />;
   }
 
   return (
@@ -152,6 +168,36 @@ export default function App() {
           The Intake Agent gathers information for a lawyer. It does not provide legal advice.
         </p>
       </footer>
+    </div>
+  );
+}
+
+function ToneScreen({ tones, onChoose, disabled }) {
+  return (
+    <div className="tone-screen">
+      <div className="tone-inner">
+        <span className="brand center">
+          <span className="dot" />
+          Intake Agent
+        </span>
+        <h1 className="tone-title">How would you like me to talk with you?</h1>
+        <p className="tone-sub">
+          Choose a tone of voice for the assistant that will ask you questions.
+        </p>
+        <div className="tone-grid">
+          {tones.map((t) => (
+            <button
+              key={t.id}
+              className="tone-card"
+              disabled={disabled}
+              onClick={() => onChoose(t.id)}
+            >
+              <span className="tone-label">{t.label}</span>
+              <span className="tone-desc">{t.description}</span>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

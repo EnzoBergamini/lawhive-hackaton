@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 load_dotenv()
 
-from .agent import IntakeAgent  # noqa: E402  (after load_dotenv so the key is set)
+from .agent import IntakeAgent, tone_options  # noqa: E402  (after load_dotenv)
 
 app = FastAPI(title="Intake Agent")
 
@@ -26,6 +26,7 @@ agent = IntakeAgent()
 
 class StartRequest(BaseModel):
     session_id: str
+    tone: str | None = None
 
 
 class ChatRequest(BaseModel):
@@ -33,9 +34,14 @@ class ChatRequest(BaseModel):
     message: str
 
 
+@app.get("/api/tones")
+def tones():
+    return {"tones": tone_options()}
+
+
 @app.post("/api/start")
 async def start(req: StartRequest):
-    return {"reply": await agent.start(req.session_id)}
+    return {"reply": await agent.start(req.session_id, req.tone)}
 
 
 @app.post("/api/chat")
