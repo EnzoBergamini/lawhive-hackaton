@@ -35,6 +35,7 @@ agent = IntakeAgent()
 class StartRequest(BaseModel):
     session_id: str
     tone: str | None = None
+    name: str | None = None
 
 
 class ChatRequest(BaseModel):
@@ -49,7 +50,7 @@ def tones():
 
 @app.post("/api/start")
 async def start(req: StartRequest):
-    r = await agent.start(req.session_id, req.tone)
+    r = await agent.start(req.session_id, req.tone, req.name)
     return {"reply": r.message, "done": r.intake_complete}
 
 

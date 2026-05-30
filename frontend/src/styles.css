@@ -243,6 +243,62 @@ body {
 .tone-label { font-size: 15.5px; font-weight: 600; }
 .tone-desc { font-size: 13px; color: var(--muted); line-height: 1.45; }
 
+/* Welcome / disclaimer screen */
+.welcome-inner { max-width: 640px; }
+.disclaimer-body {
+  text-align: left;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin: 4px 0 22px;
+}
+.disclaimer-body p {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #514c43;
+  margin: 0 0 12px;
+}
+.disclaimer-body p:last-child { margin-bottom: 0; }
+.privacy-link { color: #2f6b4f; text-decoration: underline; }
+
+.name-field { text-align: left; margin-bottom: 18px; }
+.name-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 7px;
+}
+.name-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 15.5px;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.name-input:focus { border-color: #2f6b4f; }
+.name-input::placeholder { color: var(--muted); }
+
+/* Persistent short disclaimer footer (shown on every screen) */
+.global-disclaimer {
+  max-width: var(--max);
+  margin: 28px auto 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
+  text-align: center;
+}
+
 /* Domain cards — icon-led, centred */
 .domain-card {
   align-items: center;
