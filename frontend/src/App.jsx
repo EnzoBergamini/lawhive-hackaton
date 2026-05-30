@@ -12,8 +12,16 @@ const DOMAINS = [
   { id: "business", label: "Small business", icon: "💼" },
 ];
 
+const ACCEPT = ".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx";
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
+  return (bytes / 1024 / 1024).toFixed(1) + " MB";
+}
+
 export default function App() {
-  const [phase, setPhase] = useState("tone"); // "tone" | "domain" | "chat"
+  const [phase, setPhase] = useState("tone"); // "tone" | "domain" | "chat" | "upload" | "done"
   const [tones, setTones] = useState([]);
   const [tone, setTone] = useState(null);
   const [domain, setDomain] = useState(null);
@@ -21,6 +29,8 @@ export default function App() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [started, setStarted] = useState(false);
+  const [pending, setPending] = useState([]); // files queued in the upload window
+  const [uploadResult, setUploadResult] = useState(null);
   const scrollRef = useRef(null);
   const fileRef = useRef(null);
   const taRef = useRef(null);
@@ -92,6 +102,9 @@ export default function App() {
       });
       const data = await res.json();
       setMessages((m) => [...m, { role: "agent", text: data.reply }]);
+      // When the agent has finished its questions, move straight to the upload
+      // screen (after a short beat so the wrap-up message is seen).
+      if (data.done) setTimeout(() => setPhase("upload"), 1400);
     } catch {
       setMessages((m) => [...m, { role: "agent", text: "Something went wrong. Please try again." }]);
     } finally {
@@ -99,7 +112,8 @@ export default function App() {
     }
   }
 
-  async function uploadFiles(files) {
+  // Inline attach (during the chat).
+  async function uploadInline(files) {
     if (!files.length || busy) return;
     setStarted(true);
     const names = [...files].map((f) => f.name).join(", ");
@@ -119,6 +133,36 @@ export default function App() {
     }
   }
 
+  // Final upload window: queue + submit.
+  function addPending(files) {
+    const list = [...files];
+    setPending((p) => [...p, ...list]);
+  }
+  function removePending(i) {
+    setPending((p) => p.filter((_, idx) => idx !== i));
+  }
+  async function submitDocuments() {
+    setBusy(true);
+    try {
+      let data = { stored: [] };
+      if (pending.length) {
+        const form = new FormData();
+        form.append("session_id", sessionId);
+        for (const f of pending) form.append("files", f);
+        // Just store the files on disk — processing happens later.
+        const res = await fetch("/api/documents", { method: "POST", body: form });
+        data = await res.json();
+      }
+      setUploadResult(data);
+      setPhase("done");
+    } catch {
+      setUploadResult({ error: true });
+      setPhase("done");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function onKeyDown(e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -129,9 +173,24 @@ export default function App() {
   if (phase === "tone") {
     return <ToneScreen tones={tones} onChoose={chooseTone} disabled={busy} />;
   }
-
   if (phase === "domain") {
     return <DomainScreen onChoose={chooseDomain} disabled={busy} />;
+  }
+  if (phase === "upload") {
+    return (
+      <UploadScreen
+        pending={pending}
+        onAdd={addPending}
+        onRemove={removePending}
+        onSubmit={submitDocuments}
+        onBack={() => setPhase("chat")}
+        busy={busy}
+        messages={messages}
+      />
+    );
+  }
+  if (phase === "done") {
+    return <DoneScreen result={uploadResult} />;
   }
 
   return (
@@ -139,14 +198,11 @@ export default function App() {
       <header className="topbar">
         <div className="brand">
           <span className="dot" />
-          Intake Agent
+          CLEARFILE
         </div>
-        {domain && (
-          <span className="domain-badge">
-            <span className="badge-icon">{domain.icon}</span>
-            {domain.label}
-          </span>
-        )}
+        <button className="finish-btn" onClick={() => setPhase("upload")}>
+          Finish & upload →
+        </button>
       </header>
 
       <main className="conversation" ref={scrollRef}>
@@ -187,15 +243,15 @@ export default function App() {
             type="file"
             multiple
             hidden
-            accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx"
+            accept={ACCEPT}
             onChange={(e) => {
-              uploadFiles(e.target.files);
+              uploadInline(e.target.files);
               e.target.value = "";
             }}
           />
         </div>
         <p className="disclaimer">
-          The Intake Agent gathers information for a lawyer. It does not provide legal advice.
+          CLEARFILE gathers information for a lawyer. It does not provide legal advice.
         </p>
       </footer>
     </div>
@@ -208,7 +264,7 @@ function ToneScreen({ tones, onChoose, disabled }) {
       <div className="tone-inner">
         <span className="brand center">
           <span className="dot" />
-          Intake Agent
+          CLEARFILE
         </span>
         <div className="step-hint">Step 1 of 2</div>
         <h1 className="tone-title">How would you like me to talk with you?</h1>
@@ -239,13 +295,11 @@ function DomainScreen({ onChoose, disabled }) {
       <div className="tone-inner">
         <span className="brand center">
           <span className="dot" />
-          Intake Agent
+          CLEARFILE
         </span>
         <div className="step-hint">Step 2 of 2</div>
         <h1 className="tone-title">What area of law does this relate to?</h1>
-        <p className="tone-sub">
-          Pick the area that best fits your situation.
-        </p>
+        <p className="tone-sub">Pick the area that best fits your situation.</p>
         <div className="tone-grid domain-grid">
           {DOMAINS.map((d) => (
             <button
@@ -259,6 +313,139 @@ function DomainScreen({ onChoose, disabled }) {
             </button>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function buildRecap(messages = []) {
+  const qa = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role === "user" && !m.file) {
+      const prev = messages[i - 1];
+      qa.push({ q: prev && prev.role === "agent" ? prev.text : null, a: m.text });
+    }
+  }
+  return qa;
+}
+
+function UploadScreen({ pending, onAdd, onRemove, onSubmit, onBack, busy, messages }) {
+  const [drag, setDrag] = useState(false);
+  const inputRef = useRef(null);
+  const recap = buildRecap(messages);
+
+  return (
+    <div className="tone-screen">
+      <div className="tone-inner upload-inner">
+        <span className="brand center">
+          <span className="dot" />
+          CLEARFILE
+        </span>
+        <h1 className="tone-title">Add your documents</h1>
+        <p className="tone-sub">
+          Upload anything that supports your case — tenancy agreements, letters,
+          court forms, photos, statements. A lawyer will review everything.
+        </p>
+
+        {recap.length > 0 && (
+          <details className="recap" open>
+            <summary className="recap-title">Summary of your answers</summary>
+            <ul className="recap-list">
+              {recap.map((p, i) => (
+                <li key={i} className="recap-item">
+                  {p.q && <div className="recap-q">{p.q}</div>}
+                  <div className="recap-a">{p.a}</div>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+
+        <div
+          className={"dropzone" + (drag ? " drag" : "")}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDrag(true);
+          }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDrag(false);
+            if (e.dataTransfer.files?.length) onAdd(e.dataTransfer.files);
+          }}
+          onClick={() => inputRef.current?.click()}
+        >
+          <div className="dz-icon">
+            <PaperclipIcon />
+          </div>
+          <div className="dz-main">Drag &amp; drop files here</div>
+          <div className="dz-sub">or click to browse</div>
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            hidden
+            accept={ACCEPT}
+            onChange={(e) => {
+              if (e.target.files?.length) onAdd(e.target.files);
+              e.target.value = "";
+            }}
+          />
+        </div>
+
+        {pending.length > 0 && (
+          <ul className="filelist">
+            {pending.map((f, i) => (
+              <li key={i} className="fileitem">
+                <span className="fi-name">📄 {f.name}</span>
+                <span className="fi-size">{formatSize(f.size)}</span>
+                <button className="fi-remove" onClick={() => onRemove(i)} disabled={busy}>
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="upload-actions">
+          <button className="ghost-btn" onClick={onBack} disabled={busy}>
+            Back to chat
+          </button>
+          <button className="primary-btn" onClick={onSubmit} disabled={busy}>
+            {busy
+              ? "Sending…"
+              : pending.length
+              ? `Send ${pending.length} document${pending.length > 1 ? "s" : ""} to a lawyer`
+              : "Skip & send to a lawyer"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DoneScreen({ result }) {
+  const files = result?.stored || [];
+  return (
+    <div className="tone-screen">
+      <div className="tone-inner done-inner">
+        <div className="done-check">✓</div>
+        <h1 className="tone-title">Your case has been sent</h1>
+        <p className="tone-sub">
+          Thank you. A lawyer will review your situation
+          {files.length ? " and the documents you provided" : ""} and be in touch
+          shortly.
+        </p>
+        {files.length > 0 && (
+          <ul className="filelist done-files">
+            {files.map((name, i) => (
+              <li key={i} className="fileitem">
+                <span className="fi-name">📄 {name}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );
