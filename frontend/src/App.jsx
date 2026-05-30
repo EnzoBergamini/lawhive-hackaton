@@ -31,6 +31,8 @@ export default function App() {
   const [started, setStarted] = useState(false);
   const [pending, setPending] = useState([]); // files queued in the upload window
   const [uploadResult, setUploadResult] = useState(null);
+  const [dossier, setDossier] = useState(null);
+  const [loadingDossier, setLoadingDossier] = useState(false);
   const scrollRef = useRef(null);
   const fileRef = useRef(null);
   const taRef = useRef(null);
@@ -163,6 +165,26 @@ export default function App() {
     }
   }
 
+  // Extract the structured case file (synthesis + timeline) and show it.
+  async function showDossier() {
+    setLoadingDossier(true);
+    try {
+      const res = await fetch("/api/dossier", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+      const data = await res.json();
+      setDossier(data);
+      setPhase("dossier");
+    } catch {
+      setDossier({ error: true });
+      setPhase("dossier");
+    } finally {
+      setLoadingDossier(false);
+    }
+  }
+
   function onKeyDown(e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -190,7 +212,16 @@ export default function App() {
     );
   }
   if (phase === "done") {
-    return <DoneScreen result={uploadResult} />;
+    return (
+      <DoneScreen
+        result={uploadResult}
+        onShowDossier={showDossier}
+        loading={loadingDossier}
+      />
+    );
+  }
+  if (phase === "dossier") {
+    return <DossierScreen data={dossier} onBack={() => setPhase("done")} />;
   }
 
   return (
@@ -425,7 +456,7 @@ function UploadScreen({ pending, onAdd, onRemove, onSubmit, onBack, busy, messag
   );
 }
 
-function DoneScreen({ result }) {
+function DoneScreen({ result, onShowDossier, loading }) {
   const files = result?.stored || [];
   return (
     <div className="tone-screen">
@@ -446,6 +477,150 @@ function DoneScreen({ result }) {
             ))}
           </ul>
         )}
+        <div className="upload-actions">
+          <button className="primary-btn" onClick={onShowDossier} disabled={loading}>
+            {loading ? "Building case file…" : "View case file →"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Case file (synthesis header + chronological timeline) ------------------
+
+const CATEGORY_LABELS = {
+  agreement: "Agreement",
+  payment: "Payment",
+  communication: "Communication",
+  breach: "Breach",
+  notice: "Notice",
+  complaint: "Complaint",
+  legal_action: "Legal action",
+  decision: "Decision",
+  deadline: "Deadline",
+  incident: "Incident",
+  other: "Event",
+};
+
+function formatMoney(m) {
+  if (!m) return null;
+  try {
+    return new Intl.NumberFormat("en-GB", {
+      style: "currency",
+      currency: m.currency || "GBP",
+      maximumFractionDigits: m.amount % 1 === 0 ? 0 : 2,
+    }).format(m.amount);
+  } catch {
+    return `${m.currency || "GBP"} ${m.amount}`;
+  }
+}
+
+function DossierScreen({ data, onBack }) {
+  if (!data || data.error) {
+    return (
+      <div className="tone-screen">
+        <div className="tone-inner">
+          <h1 className="tone-title">Couldn't build the case file</h1>
+          <p className="tone-sub">Please try again in a moment.</p>
+          <div className="upload-actions">
+            <button className="ghost-btn" onClick={onBack}>
+              Back
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const events = data.events || [];
+  const amount = formatMoney(data.amount_in_dispute);
+
+  return (
+    <div className="dossier-screen">
+      <header className="topbar">
+        <button className="finish-btn dossier-back" onClick={onBack}>
+          ← Back
+        </button>
+        <div className="brand">
+          <span className="dot" />
+          Case file
+        </div>
+      </header>
+
+      <main className="dossier">
+        <section className="case-header">
+          <div className="case-type">{data.matter_type}</div>
+          {data.summary && <p className="case-summary">{data.summary}</p>}
+
+          <div className="case-facts">
+            {data.parties?.length > 0 && (
+              <div className="fact-block">
+                <div className="fact-label">Parties</div>
+                <div className="chips">
+                  {data.parties.map((p, i) => (
+                    <span key={i} className="chip">
+                      <strong>{p.name}</strong>
+                      {p.role ? ` — ${p.role}` : ""}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {amount && (
+              <div className="fact-block">
+                <div className="fact-label">Amount in dispute</div>
+                <div className="fact-value">{amount}</div>
+              </div>
+            )}
+            {data.next_deadline && (
+              <div className="fact-block">
+                <div className="fact-label">Next deadline</div>
+                <div className="fact-value deadline">
+                  {data.next_deadline.label}
+                  {data.next_deadline.date_text ? ` · ${data.next_deadline.date_text}` : ""}
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="timeline">
+          {events.map((e, i) => (
+            <TimelineItem key={i} event={e} />
+          ))}
+          {events.length === 0 && (
+            <p className="tone-sub">No dated events were found.</p>
+          )}
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function TimelineItem({ event: e }) {
+  const amount = formatMoney(e.amount);
+  return (
+    <div className="tl-item">
+      <div className="tl-rail">
+        <span className="tl-dot" />
+      </div>
+      <div className="tl-body">
+        <div className="tl-date">{e.date_text || "Date unknown"}</div>
+        <div className="tl-title">{e.title}</div>
+        {e.detail && <div className="tl-detail">{e.detail}</div>}
+        <div className="tl-meta">
+          <span className={"badge cat-" + e.category}>
+            {CATEGORY_LABELS[e.category] || "Event"}
+          </span>
+          {e.disputed && <span className="badge disputed">Disputed</span>}
+          {e.is_deadline && <span className="badge deadline">Deadline</span>}
+          {amount && <span className="tl-amount">{amount}</span>}
+          {e.parties?.length > 0 && (
+            <span className="tl-parties">{e.parties.join(", ")}</span>
+          )}
+          {e.source && <span className="tl-source">{e.source}</span>}
+        </div>
       </div>
     </div>
   );
