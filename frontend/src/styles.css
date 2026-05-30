@@ -27,6 +27,7 @@ body {
 
 /* Top bar — discreet, centered brand */
 .topbar {
+  position: relative;
   display: flex;
   justify-content: center;
   padding: 22px 16px 6px;
@@ -194,7 +195,15 @@ body {
   text-align: center;
   animation: rise 0.4s ease both;
 }
-.brand.center { justify-content: center; display: inline-flex; margin-bottom: 28px; }
+.brand.center { justify-content: center; display: inline-flex; margin-bottom: 20px; }
+.step-hint {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
 .tone-title {
   font-size: 30px;
   font-weight: 600;
@@ -233,9 +242,39 @@ body {
 .tone-label { font-size: 15.5px; font-weight: 600; }
 .tone-desc { font-size: 13px; color: var(--muted); line-height: 1.45; }
 
+/* Domain cards — icon-led, centred */
+.domain-card {
+  align-items: center;
+  text-align: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px 16px;
+}
+.domain-icon { font-size: 30px; line-height: 1; }
+.domain-card .tone-label { font-size: 15px; }
+
+/* Selected-domain badge in the chat header */
+.domain-badge {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 11px 4px 9px;
+  background: #fff;
+}
+.domain-badge .badge-icon { font-size: 14px; }
+
 @media (max-width: 640px) {
   .tone-grid { grid-template-columns: 1fr; }
   .tone-title { font-size: 24px; }
+  .domain-badge { display: none; }
 }
 
 /* Scrollbar */
