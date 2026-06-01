@@ -678,6 +678,44 @@ class IntakeAgent:
         session.case_file = case
         return case
 
+    async def add_event(self, session_id: str, data: dict) -> CaseFile:
+        """Append a manually-entered event to the session's case file.
+
+        Builds the case file first if it doesn't exist yet, inserts the event
+        (marked as a manual entry), re-sorts chronologically, and returns the
+        updated file so the timeline re-renders in place.
+        """
+        session = self._session(session_id)
+        case = session.case_file or await self.build_case_file(session_id)
+
+        iso = (data.get("date") or "").strip()
+        try:
+            date = dt.date.fromisoformat(iso) if iso else None
+        except ValueError:
+            date = None
+        date_text = (data.get("date_text") or "").strip() or (
+            f"{date.day} {date:%B %Y}" if date else "Date unknown"
+        )
+        try:
+            category = Category(data.get("category") or "other")
+        except ValueError:
+            category = Category.other
+
+        case.events.append(
+            Event(
+                date=date,
+                date_text=date_text,
+                title=(data.get("title") or "Untitled event").strip(),
+                detail=(data.get("detail") or "").strip() or None,
+                category=category,
+                source="Manual entry",
+                disputed=bool(data.get("disputed")),
+                is_deadline=bool(data.get("is_deadline")),
+            )
+        )
+        case.sorted()
+        return case
+
     async def build_assessment(self, session_id: str) -> str:
         """Write the plain-English client assessment from the extracted facts.
 

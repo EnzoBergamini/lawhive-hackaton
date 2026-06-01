@@ -209,6 +209,18 @@ export default function App() {
     }
   }
 
+  // Manually add an event to the timeline; the backend returns the updated
+  // case file (re-sorted) which replaces the dossier in place.
+  async function addEvent(fields) {
+    const res = await fetch("/api/event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, ...fields }),
+    });
+    if (!res.ok) throw new Error("Failed to add event");
+    setDossier(await res.json());
+  }
+
   function onKeyDown(e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -260,6 +272,7 @@ export default function App() {
         assessment={assessment}
         assessmentLoading={assessmentLoading}
         onBack={() => setPhase("done")}
+        onAddEvent={addEvent}
       />
     );
   }
@@ -609,7 +622,8 @@ function formatMoney(m) {
   }
 }
 
-function DossierScreen({ data, assessment, assessmentLoading, onBack }) {
+function DossierScreen({ data, assessment, assessmentLoading, onBack, onAddEvent }) {
+  const [adding, setAdding] = useState(null); // null | { date }
   if (!data || data.error) {
     return (
       <div className="tone-screen">
@@ -700,10 +714,155 @@ function DossierScreen({ data, assessment, assessmentLoading, onBack }) {
           </section>
         )}
 
-        <Timeline events={events} obligations={data.obligations || []} />
+        <div className="tl-toolbar">
+          <h2 className="tl-heading">Timeline</h2>
+          <button className="add-event-btn" onClick={() => setAdding({ date: "" })}>
+            + Add event
+          </button>
+        </div>
+        <p className="tl-hint-text">Tip: in the “To scale” view, click anywhere on the timeline to add an event at that date.</p>
+
+        <Timeline
+          events={events}
+          obligations={data.obligations || []}
+          onPickDate={(date) => setAdding({ date })}
+        />
 
         <DisclaimerFooter />
       </main>
+
+      {adding && (
+        <AddEventModal
+          initialDate={adding.date}
+          onClose={() => setAdding(null)}
+          onSubmit={onAddEvent}
+        />
+      )}
+    </div>
+  );
+}
+
+const CATEGORIES = [
+  "agreement",
+  "payment",
+  "communication",
+  "breach",
+  "notice",
+  "complaint",
+  "legal_action",
+  "decision",
+  "deadline",
+  "incident",
+  "other",
+];
+
+function AddEventModal({ onClose, onSubmit, initialDate = "" }) {
+  const [form, setForm] = useState({
+    title: "",
+    date: initialDate || "",
+    detail: "",
+    category: "other",
+    disputed: false,
+    is_deadline: false,
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const set = (k) => (e) =>
+    setForm((f) => ({
+      ...f,
+      [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value,
+    }));
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!form.title.trim() || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onSubmit(form);
+      onClose();
+    } catch {
+      setError("Couldn't add the event. Please try again.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <form
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={submit}
+      >
+        <h2 className="modal-title">Add an event</h2>
+
+        <label className="field">
+          <span className="field-label">Title *</span>
+          <input
+            className="field-input"
+            value={form.title}
+            placeholder="e.g. Deposit returned in full"
+            autoFocus
+            onChange={set("title")}
+          />
+        </label>
+
+        <div className="field-row">
+          <label className="field">
+            <span className="field-label">Date</span>
+            <input
+              className="field-input"
+              type="date"
+              value={form.date}
+              onChange={set("date")}
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">Category</span>
+            <select className="field-input" value={form.category} onChange={set("category")}>
+              {CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c.replace("_", " ")}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <label className="field">
+          <span className="field-label">Detail</span>
+          <textarea
+            className="field-input"
+            rows={3}
+            value={form.detail}
+            placeholder="A short description of what happened."
+            onChange={set("detail")}
+          />
+        </label>
+
+        <div className="field-checks">
+          <label className="check">
+            <input type="checkbox" checked={form.disputed} onChange={set("disputed")} />
+            Disputed
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={form.is_deadline} onChange={set("is_deadline")} />
+            Deadline
+          </label>
+        </div>
+
+        {error && <p className="modal-error">{error}</p>}
+
+        <div className="modal-actions">
+          <button type="button" className="ghost-btn" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" className="primary-btn" disabled={busy || !form.title.trim()}>
+            {busy ? "Adding…" : "Add event"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -767,12 +926,68 @@ function humaniseGap(days) {
 
 const COMPACT_GAP = 16; // px — uniform spacing in compact (non-scaled) mode
 
-function Timeline({ events = [], obligations = [] }) {
+function tsToISO(ts) {
+  return new Date(ts).toISOString().slice(0, 10);
+}
+function tsToLabel(ts) {
+  return new Date(ts).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function Timeline({ events = [], obligations = [], onPickDate }) {
   const [scaled, setScaled] = useState(true);
+  const [hover, setHover] = useState(null); // { top, label } while pointing at the spine
+  const sectionRef = useRef(null);
   const { groups, gapDays, maxGap, undated } = buildTimeline(events, obligations);
 
   if (groups.length === 0 && undated.length === 0) {
     return <p className="tone-sub">No events were found.</p>;
+  }
+
+  // Map a viewport Y to a timestamp by interpolating between the date nodes —
+  // this is what makes a click on the spine resolve to a real (to-scale) date.
+  function tsFromClientY(clientY) {
+    const pills = sectionRef.current?.querySelectorAll(".tl-date-pill");
+    if (!pills || pills.length === 0) return null;
+    const pts = [...pills].map((el, i) => {
+      const r = el.getBoundingClientRect();
+      return { y: r.top + r.height / 2, ts: groups[i].ts };
+    });
+    if (clientY <= pts[0].y) return pts[0].ts;
+    const last = pts[pts.length - 1];
+    if (clientY >= last.y) return last.ts;
+    for (let i = 0; i < pts.length - 1; i++) {
+      if (clientY >= pts[i].y && clientY <= pts[i + 1].y) {
+        const span = pts[i + 1].y - pts[i].y || 1;
+        const frac = (clientY - pts[i].y) / span;
+        return Math.round(pts[i].ts + frac * (pts[i + 1].ts - pts[i].ts));
+      }
+    }
+    return last.ts;
+  }
+
+  const onCard = (target) =>
+    target.closest &&
+    target.closest(".tl-card, .tl-controls, .tl-undated, button, a, .tl-date-pill");
+
+  function onMove(e) {
+    if (!scaled || !onPickDate || onCard(e.target)) {
+      setHover(null);
+      return;
+    }
+    const ts = tsFromClientY(e.clientY);
+    if (ts == null) return setHover(null);
+    const top = e.clientY - sectionRef.current.getBoundingClientRect().top;
+    setHover({ top, label: tsToLabel(ts) });
+  }
+
+  function onClick(e) {
+    if (!scaled || !onPickDate || onCard(e.target)) return;
+    const ts = tsFromClientY(e.clientY);
+    onPickDate(ts == null ? "" : tsToISO(ts));
   }
 
   return (
@@ -796,7 +1011,21 @@ function Timeline({ events = [], obligations = [] }) {
         </div>
       </div>
 
-      <section className={"timeline" + (scaled ? " scaled" : " compact")}>
+      <section
+        ref={sectionRef}
+        className={
+          "timeline" + (scaled ? " scaled" : " compact") + (onPickDate && scaled ? " clickable" : "")
+        }
+        onMouseMove={onMove}
+        onMouseLeave={() => setHover(null)}
+        onClick={onClick}
+      >
+        {scaled && hover && (
+          <div className="tl-addhint" style={{ top: hover.top }}>
+            <span className="tl-addhint-plus">+</span>
+            Add at {hover.label}
+          </div>
+        )}
         {groups.map((g, i) => {
           const side = i % 2 === 0 ? "tl-left" : "tl-right";
           // Elapsed-time labels only make sense in the to-scale view.
@@ -838,15 +1067,17 @@ function Timeline({ events = [], obligations = [] }) {
 }
 
 function TimelineCard({ event: e }) {
-  const hasDoc = e.source && e.source !== "Conversation";
+  const isManual = e.source === "Manual entry";
+  const hasDoc = e.source && e.source !== "Conversation" && !isManual;
   return (
     <div className={"tl-card cat-" + e.category}>
       <div className="tl-title">{e.title}</div>
       {e.detail && <p className="tl-desc">{e.detail}</p>}
-      {(e.disputed || e.is_deadline) && (
+      {(e.disputed || e.is_deadline || isManual) && (
         <div className="tl-tags">
           {e.disputed && <span className="badge disputed">Disputed</span>}
           {e.is_deadline && <span className="badge deadline">Deadline</span>}
+          {isManual && <span className="badge manual">Manual</span>}
         </div>
       )}
       {hasDoc && <SourceLink source={e.source} />}

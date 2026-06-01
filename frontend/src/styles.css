@@ -546,6 +546,102 @@ body {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Timeline toolbar (heading + add-event button) */
+.tl-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 920px;
+  margin: 8px auto 2px;
+}
+.tl-heading {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0;
+}
+.add-event-btn {
+  border: 1px solid #c7d8e8;
+  background: #eef3f8;
+  color: #2f5a8a;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.add-event-btn:hover { background: #e2edf7; border-color: #aecbe6; }
+
+/* Manual-entry badge */
+.badge.manual { background: #e7e2f3; color: #5a4a8a; }
+
+/* Modal (add event) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(30, 27, 22, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: rise 0.12s ease both;
+}
+.modal {
+  width: 100%;
+  max-width: 460px;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.28);
+  padding: 22px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.modal-title { font-size: 19px; font-weight: 700; margin: 0 0 2px; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.field-input {
+  font: inherit;
+  font-size: 14px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+.field-input:focus { outline: 2px solid #aecbe6; outline-offset: 0; border-color: #aecbe6; }
+textarea.field-input { resize: vertical; min-height: 60px; }
+.field-row { display: flex; gap: 12px; }
+.field-row .field { flex: 1; }
+.field-checks { display: flex; gap: 18px; margin-top: 2px; }
+.check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.check input { width: 15px; height: 15px; }
+.modal-error { color: #a14a2f; font-size: 13px; margin: 0; }
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
 /* Timeline view controls (to-scale ⇄ compact) */
 .tl-controls {
   display: flex;
@@ -598,6 +694,53 @@ body {
   width: 2px;
   background: var(--line);
   transform: translateX(-50%);
+}
+
+/* Click-to-add affordance (to-scale view) */
+.tl-hint-text {
+  max-width: 920px;
+  margin: 0 auto 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.timeline.clickable {
+  cursor: copy;
+}
+.timeline.clickable .tl-card,
+.timeline.clickable .tl-doc {
+  cursor: auto;
+}
+.timeline.clickable .tl-doc { cursor: pointer; }
+/* Floating "add at <date>" marker that follows the cursor down the spine */
+.tl-addhint {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px 4px 6px;
+  background: #2f5a8a;
+  color: #fff;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(47, 90, 138, 0.4), 0 0 0 4px var(--bg);
+}
+.tl-addhint-plus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.25);
+  font-size: 13px;
+  line-height: 1;
 }
 
 /* One date group (shares a single point on the time axis) */

@@ -90,6 +90,24 @@ async def assessment(req: DossierRequest):
     return {"case_assessment": await agent.build_assessment(req.session_id)}
 
 
+class AddEventRequest(BaseModel):
+    session_id: str
+    title: str
+    date: str | None = None  # ISO yyyy-mm-dd, or empty for an undated event
+    date_text: str | None = None
+    detail: str | None = None
+    category: str = "other"
+    disputed: bool = False
+    is_deadline: bool = False
+
+
+@app.post("/api/event")
+async def add_event(req: AddEventRequest):
+    """Manually add an event to the timeline; returns the updated case file."""
+    case = await agent.add_event(req.session_id, req.model_dump(exclude={"session_id"}))
+    return case.model_dump(mode="json")
+
+
 @app.get("/api/document")
 def document(session_id: str, name: str):
     """Serve an uploaded document inline, so a timeline card can open it."""
