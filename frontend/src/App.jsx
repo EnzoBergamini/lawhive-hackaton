@@ -52,6 +52,26 @@ export default function App() {
     })();
   }, []);
 
+  // DEV: when BY_PASS_INTAKE is set on the backend, skip the welcome/tone/domain
+  // screens and the chat, then jump straight to the timeline using a preloaded
+  // sample case — so we can iterate on the case file without doing the intake.
+  useEffect(() => {
+    (async () => {
+      try {
+        const cfg = await (await fetch("/api/config")).json();
+        if (!cfg.bypass) return;
+        await fetch("/api/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sessionId, tone: "plain_english", name: "Dev" }),
+        });
+        showDossier();
+      } catch {
+        /* bypass is best-effort; fall back to the normal flow */
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, busy]);

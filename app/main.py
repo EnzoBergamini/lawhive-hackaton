@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 load_dotenv()
 
-from .agent import IntakeAgent, tone_options  # noqa: E402  (after load_dotenv)
+from .agent import IntakeAgent, bypass_enabled, tone_options  # noqa: E402  (after load_dotenv)
 
 app = FastAPI(title="CLEARFILE")
 
@@ -46,6 +46,12 @@ class ChatRequest(BaseModel):
 @app.get("/api/tones")
 def tones():
     return {"tones": tone_options()}
+
+
+@app.get("/api/config")
+def config():
+    """Frontend bootstrap flags. `bypass` skips intake straight to the timeline."""
+    return {"bypass": bypass_enabled()}
 
 
 @app.post("/api/start")

@@ -17,21 +17,44 @@ import asyncio
 import os
 from dataclasses import dataclass, field
 
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, BinaryContent, RunContext
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage
-from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
 from .timeline import CaseFile
 
-# The app talks to the Lawhive hackathon AI gateway, an Anthropic-compatible
-# proxy that serves Claude (via Vertex). Configured through environment vars.
-GATEWAY_BASE_URL = os.environ.get("LAWHIVE_AI_BASE_URL", "https://ai.hack.lawhive.co.uk")
-GATEWAY_TOKEN = os.environ.get("LAWHIVE_AI_TOKEN", "")
-MODEL = os.environ.get("LAWHIVE_MODEL", "vertex_ai/claude-opus-4-7")
+# The app talks to OpenAI directly, authenticated with a standard API key.
+# Configured through environment vars.
+OPENAI_API_KEY = os.environ.get("OPEN_AI_API_KEY", "")
+MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
+
+# Sample-case directory used by the dev intake bypass (see BY_PASS_INTAKE below).
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+
+# When set, skip the intake conversation entirely and preload a sample case's
+# documents so we can iterate on the timeline. Empty / falsy disables it; a
+# truthy flag ("1", "true", …) uses "case-1"; an explicit folder name like
+# "case-3" loads that case from `data/`.
+BY_PASS_INTAKE = os.environ.get("BY_PASS_INTAKE", "").strip()
+
+
+def _bypass_case() -> str:
+    """Return the sample case folder to preload, or "" when bypass is off."""
+    val = BY_PASS_INTAKE.lower()
+    if val in ("", "0", "false", "no", "off"):
+        return ""
+    if val in ("1", "true", "yes", "on"):
+        return "case-1"
+    return BY_PASS_INTAKE
+
+
+def bypass_enabled() -> bool:
+    """Whether the dev intake bypass is active (exposed to the frontend)."""
+    return bool(_bypass_case())
 
 # --- Prompt ------------------------------------------------------------------
 
@@ -223,6 +246,24 @@ def media_type_for(filename: str) -> str:
     return _MEDIA_TYPES.get(ext, "application/octet-stream")
 
 
+def load_sample_documents(case: str) -> list[tuple[str, bytes]]:
+    """Read every supported document from `data/<case>` as (filename, bytes).
+
+    Used by the dev intake bypass to preload a case so the timeline can be
+    built without going through the conversation first.
+    """
+    folder = os.path.join(DATA_DIR, case)
+    docs: list[tuple[str, bytes]] = []
+    if not os.path.isdir(folder):
+        return docs
+    for name in sorted(os.listdir(folder)):
+        path = os.path.join(folder, name)
+        if os.path.isfile(path) and media_type_for(name) != "application/octet-stream":
+            with open(path, "rb") as fh:
+                docs.append((name, fh.read()))
+    return docs
+
+
 class IntakeReply(BaseModel):
     """Structured turn output: the visible message plus a completion flag."""
 
@@ -259,10 +300,9 @@ class Session:
 
 class IntakeAgent:
     def __init__(self) -> None:
-        # Point the Anthropic client at the gateway; it authenticates with a
-        # bearer token rather than a standard Anthropic API key.
-        client = AsyncAnthropic(base_url=GATEWAY_BASE_URL, auth_token=GATEWAY_TOKEN)
-        model = AnthropicModel(MODEL, provider=AnthropicProvider(anthropic_client=client))
+        # Standard OpenAI client, authenticated with an API key.
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        model = OpenAIChatModel(MODEL, provider=OpenAIProvider(openai_client=client))
         self.agent = Agent(
             model, deps_type=Deps, output_type=IntakeReply, system_prompt=SYSTEM_PROMPT
         )
@@ -325,6 +365,26 @@ class IntakeAgent:
         session.case_file = None
         session.tone = tone if tone in TONES else DEFAULT_TONE
         session.name = (name or "").strip() or None
+
+        # DEV bypass: skip the conversation, preload a sample case's documents,
+        # and report the intake as already complete so the UI jumps to the
+        # timeline. No model call is made here.
+        case = _bypass_case()
+        if case:
+            docs = load_sample_documents(case)
+            session.documents.extend(docs)
+            names = ", ".join(n for n, _ in docs) or "none"
+            session.transcript.append(
+                ("Assistant", f"[Intake bypassed — preloaded documents from {case}: {names}]")
+            )
+            return IntakeReply(
+                message=(
+                    f"Intake bypassed (dev mode). Loaded {len(docs)} document(s) "
+                    f"from {case} — building the timeline."
+                ),
+                intake_complete=True,
+            )
+
         kickoff = "Please begin the intake conversation."
         if session.name:
             kickoff += (
