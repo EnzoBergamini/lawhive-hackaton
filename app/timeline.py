@@ -40,6 +40,21 @@ class Party(BaseModel):
     role: str = Field(description="e.g. client, employer, garage, airline")
 
 
+class Citation(BaseModel):
+    """Where, inside a source document, a fact is evidenced."""
+
+    location: str = Field(
+        description="Human locator, e.g. 'Page 1, deposit clause' or "
+        "'Transaction dated 13 Apr 2024'."
+    )
+    quote: str | None = Field(
+        None, description="A short exact excerpt that evidences the fact, if available."
+    )
+    page: int | None = Field(
+        None, description="1-based PDF page number, for deep-linking the document."
+    )
+
+
 class Event(BaseModel):
     """One dated fact in the case timeline."""
 
@@ -57,6 +72,10 @@ class Event(BaseModel):
     parties: list[str] = Field(default_factory=list)
     amount: Money | None = Field(None, description="Only when money is involved.")
     source: str = Field(description="Source filename, or 'Conversation'.")
+    citation: Citation | None = Field(
+        None, description="Where in `source` this fact is evidenced (null for "
+        "facts from the conversation)."
+    )
     disputed: bool = Field(
         False, description="True when the fact is contested between parties."
     )
@@ -116,6 +135,22 @@ class Obligation(BaseModel):
         return self
 
 
+class Document(BaseModel):
+    """A source document in the case, with a short description.
+
+    Joined to the timeline by name: an `Event.source` matching `Document.name`
+    means that event was evidenced by this document.
+    """
+
+    name: str = Field(description="Filename — matches Event.source.")
+    doc_type: str = Field(
+        description="Short type label, e.g. 'Tenancy agreement', 'Bank statement'."
+    )
+    description: str = Field(
+        description="1-2 sentences: what the document is and the key facts it carries."
+    )
+
+
 class CaseFile(BaseModel):
     """The full snapshot: synthesis header + chronological events."""
 
@@ -133,6 +168,10 @@ class CaseFile(BaseModel):
     obligations: list[Obligation] = Field(
         default_factory=list,
         description="Time-limited actions ('do X within N days of a date').",
+    )
+    documents: list[Document] = Field(
+        default_factory=list,
+        description="Source documents with a short description each.",
     )
 
     def sorted(self) -> "CaseFile":

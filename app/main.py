@@ -108,6 +108,12 @@ async def add_event(req: AddEventRequest):
     return case.model_dump(mode="json")
 
 
+@app.post("/api/dossier/chat")
+async def dossier_chat(req: ChatRequest):
+    """Answer a question about the case file (the dossier side chat)."""
+    return {"reply": await agent.chat_about_case(req.session_id, req.message)}
+
+
 @app.get("/api/document")
 def document(session_id: str, name: str):
     """Serve an uploaded document inline, so a timeline card can open it."""

@@ -30,7 +30,9 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from .timeline import (
     CaseFile,
     Category,
+    Citation,
     Deadline,
+    Document,
     Event,
     Money,
     Obligation,
@@ -146,6 +148,10 @@ Produce:
   action, "pending" if the window is still open, otherwise "unknown". Do NOT
   compute the deadline date yourself — leave due_date null; it is derived from
   anchor_date + window_days.
+- documents: one entry per uploaded document. For each give: name (the EXACT
+  filename, so it matches each event's source), doc_type (a short label such as
+  "Tenancy agreement", "Bank statement", "Scheme search result"), and
+  description (1-2 sentences on what the document is and the key facts it carries).
 
 For each event:
 - date: the normalised ISO date (YYYY-MM-DD), used for sorting. Resolve relative
@@ -161,6 +167,11 @@ For each event:
 - parties: who was involved in this event.
 - amount: only when money is the subject of the event.
 - source: the document filename it came from, or "Conversation".
+- citation: when the event comes from a document, WHERE in it the fact appears —
+  location (plain words, e.g. "Page 1, deposit clause", "Transaction dated 13 Apr
+  2024", "Search summary box"), quote (a short exact excerpt if available), and
+  page (the 1-based PDF page number when known). Leave citation null for facts
+  that come from the Conversation.
 - disputed: true when the fact is contested between the parties.
 - is_deadline: true for a future deadline / date not to miss.
 
@@ -193,6 +204,25 @@ Cite the real figures, dates and document names from the facts. Never invent
 facts that are not provided. If the evidence is weak, partial or mixed, say so
 honestly rather than overstating. Plain text only — no markdown symbols,
 headings or bullet characters. Return ONLY the assessment text.
+"""
+
+# Answers follow-up questions about a finished case file (the side chat).
+DOSSIER_CHAT_PROMPT = """\
+You are CLEARFILE's case assistant. The user is looking at the case file for one
+specific legal matter and wants to discuss it with you. The current case file —
+summary, parties, amount, deadlines, the timeline of evidenced facts, and any
+time-limited obligations — is provided to you as context.
+
+Rules:
+- Answer ONLY from the case file you are given. If the answer isn't in it, say
+  you don't have that information rather than guessing.
+- Be concise and plain-English: a few short sentences, no legal jargon.
+- When you state a fact, ground it in the file (a date, an amount, a document
+  name, an event).
+- You are NOT a lawyer and must not give regulated legal advice or predict an
+  outcome. For anything needing a judgement call, suggest confirming with a
+  qualified solicitor.
+- Address the user as "you".
 """
 
 # --- Tone of voice -----------------------------------------------------------
@@ -328,25 +358,39 @@ def sample_case_file() -> CaseFile:
            Category.other, _CONV, parties=["Jamie Watson", "Acorn Lettings"]),
         ev("2024-04-01", "1 April 2024", "Holding deposit paid",
            "Jamie paid a £500 holding deposit to reserve the property.",
-           Category.payment, _SRC_BANK, parties=["Jamie Watson"], amount=gbp(500)),
+           Category.payment, _SRC_BANK, parties=["Jamie Watson"], amount=gbp(500),
+           citation=Citation(location="Transaction dated 1 Apr 2024", page=1,
+                             quote="FASTER PAYMENT ACORN LETTINGS  −£500.00")),
         ev("2024-04-13", "13 April 2024", "Tenancy deposit paid",
            "Jamie paid the £1,800 tenancy deposit to the landlord by bank transfer.",
-           Category.payment, _SRC_BANK, parties=["Jamie Watson", "Mr R. Hale"], amount=gbp(1800)),
+           Category.payment, _SRC_BANK, parties=["Jamie Watson", "Mr R. Hale"], amount=gbp(1800),
+           citation=Citation(location="Transaction dated 13 Apr 2024", page=1,
+                             quote="TRANSFER R HALE  −£1,800.00")),
         ev("2024-04-17", "17 April 2024", "Tenancy agreement signed",
            "Both parties signed a 12-month assured shorthold tenancy.",
-           Category.agreement, _SRC_TENANCY, parties=["Jamie Watson", "Mr R. Hale"]),
+           Category.agreement, _SRC_TENANCY, parties=["Jamie Watson", "Mr R. Hale"],
+           citation=Citation(location="Signature page", page=8,
+                             quote="Signed by the parties on 17 April 2024")),
         ev("2024-04-17", "17 April 2024", "Tenancy term begins",
            "The fixed term started under the signed agreement.",
-           Category.agreement, _SRC_TENANCY),
+           Category.agreement, _SRC_TENANCY,
+           citation=Citation(location="Clause 1 — Term", page=1,
+                             quote="for a fixed term of 12 months commencing 17 April 2024")),
         ev("2024-04-22", "22 April 2024", "DPS — no record found",
            "A Deposit Protection Service search returned no protected deposit.",
-           Category.decision, _SRC_DPS, disputed=True),
+           Category.decision, _SRC_DPS, disputed=True,
+           citation=Citation(location="Search result summary",
+                             quote="No deposit found matching the details provided.")),
         ev("2024-04-22", "22 April 2024", "MyDeposits — no record found",
            "A MyDeposits scheme search returned no record of the deposit.",
-           Category.decision, _SRC_MYD, disputed=True),
+           Category.decision, _SRC_MYD, disputed=True,
+           citation=Citation(location="Search result summary",
+                             quote="No matching deposit protection found.")),
         ev("2024-04-22", "22 April 2024", "TDS — no record found",
            "A Tenancy Deposit Scheme search also returned no record.",
-           Category.decision, _SRC_TDS, disputed=True),
+           Category.decision, _SRC_TDS, disputed=True,
+           citation=Citation(location="Search result summary",
+                             quote="No record of a protected deposit.")),
         ev("2024-06-30", "30 June 2024", "Tenant queries protection",
            "Jamie emailed the landlord asking which scheme protected the deposit.",
            Category.communication, _CONV, parties=["Jamie Watson", "Mr R. Hale"]),
@@ -427,6 +471,26 @@ def sample_case_file() -> CaseFile:
             label="Landlord's response to letter before action"),
         events=events,
         obligations=obligations,
+        documents=[
+            Document(
+                name=_SRC_BANK, doc_type="Bank statement",
+                description="Jamie's bank statement showing the outgoing transfers for "
+                "the £500 holding deposit (1 Apr) and the £1,800 tenancy deposit (13 Apr 2024)."),
+            Document(
+                name=_SRC_TENANCY, doc_type="Tenancy agreement",
+                description="The signed 12-month assured shorthold tenancy between Jamie "
+                "Watson and Mr R. Hale, with the term dates and the deposit clause."),
+            Document(
+                name=_SRC_DPS, doc_type="Scheme search result",
+                description="A Deposit Protection Service (DPS) search showing no protected "
+                "deposit on record for the address."),
+            Document(
+                name=_SRC_MYD, doc_type="Scheme search result",
+                description="A MyDeposits scheme search returning no protected deposit."),
+            Document(
+                name=_SRC_TDS, doc_type="Scheme search result",
+                description="A Tenancy Deposit Scheme (TDS) search returning no protected deposit."),
+        ],
     )
 
 
@@ -449,6 +513,13 @@ class Deps:
 
 
 @dataclass
+class DossierDeps:
+    """Per-run dependencies for the side chat — carries the case facts."""
+
+    case_facts: str
+
+
+@dataclass
 class Session:
     """In-memory state for one client conversation."""
 
@@ -462,6 +533,8 @@ class Session:
     # The last extracted case file, cached so the (deferred) assessment can be
     # written from it without re-reading the documents.
     case_file: CaseFile | None = None
+    # History of the dossier side-chat (kept apart from the intake messages).
+    dossier_messages: list[ModelMessage] = field(default_factory=list)
 
 
 class IntakeAgent:
@@ -476,7 +549,16 @@ class IntakeAgent:
         self.extractor = Agent(model, output_type=CaseFile, system_prompt=EXTRACTION_PROMPT)
         # And a plain-text agent that writes the client-facing case assessment.
         self.assessor = Agent(model, system_prompt=ASSESSMENT_PROMPT)
+        # Side chat: answers questions about a finished case file.
+        self.dossier_agent = Agent(
+            model, deps_type=DossierDeps, system_prompt=DOSSIER_CHAT_PROMPT
+        )
         self.sessions: dict[str, Session] = {}
+
+        # Inject the current case facts on every dossier-chat request.
+        @self.dossier_agent.instructions
+        def _facts(ctx: RunContext[DossierDeps]) -> str:
+            return "Here is the case file you are discussing:\n\n" + ctx.deps.case_facts
 
         # Dynamic instruction: inject the chosen tone on every request so it
         # applies consistently across the whole conversation.
@@ -529,6 +611,7 @@ class IntakeAgent:
         session.transcript = []
         session.documents = []
         session.case_file = None
+        session.dossier_messages = []
         session.tone = tone if tone in TONES else DEFAULT_TONE
         session.name = (name or "").strip() or None
 
@@ -716,6 +799,28 @@ class IntakeAgent:
         case.sorted()
         return case
 
+    async def chat_about_case(self, session_id: str, message: str) -> str:
+        """Answer a question about the case file (the dossier side chat).
+
+        Grounds the reply in the current case file (rebuilt if needed) and keeps
+        its own conversation history, separate from the intake chat.
+        """
+        session = self._session(session_id)
+        case = session.case_file or await self.build_case_file(session_id)
+        deps = DossierDeps(case_facts=self._case_facts(case))
+        delays = [2, 8, 20]
+        for attempt in range(len(delays) + 1):
+            try:
+                result = await self.dossier_agent.run(
+                    message, message_history=session.dossier_messages, deps=deps
+                )
+                session.dossier_messages = result.all_messages()
+                return (result.output or "").strip()
+            except ModelHTTPError as exc:
+                if exc.status_code != 429 or attempt == len(delays):
+                    raise
+                await asyncio.sleep(delays[attempt])
+
     async def build_assessment(self, session_id: str) -> str:
         """Write the plain-English client assessment from the extracted facts.
 
@@ -753,10 +858,17 @@ class IntakeAgent:
                     f"  - {o.action}: within {o.window_days} days of "
                     f"{o.anchor_text}{due} ({o.status.value}){basis}"
                 )
+        if case.documents:
+            lines.append("\nSource documents:")
+            for d in case.documents:
+                lines.append(f"  - {d.name} ({d.doc_type}): {d.description}")
         lines.append("\nTimeline of evidenced facts:")
         for e in case.events:
             amt = f" — {e.amount.currency} {e.amount.amount}" if e.amount else ""
             flags = " [DISPUTED]" if e.disputed else ""
             lines.append(f"  - {e.date_text}: {e.title}{amt}{flags}")
             lines.append(f"      {e.detail}  [{e.source}]")
+            if e.citation:
+                q = f' — "{e.citation.quote}"' if e.citation.quote else ""
+                lines.append(f"      ↳ found in {e.source}: {e.citation.location}{q}")
         return "\n".join(lines)

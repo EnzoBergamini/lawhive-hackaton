@@ -624,6 +624,7 @@ function formatMoney(m) {
 
 function DossierScreen({ data, assessment, assessmentLoading, onBack, onAddEvent }) {
   const [adding, setAdding] = useState(null); // null | { date }
+  const [docsOpen, setDocsOpen] = useState(false);
   if (!data || data.error) {
     return (
       <div className="tone-screen">
@@ -642,6 +643,7 @@ function DossierScreen({ data, assessment, assessmentLoading, onBack, onAddEvent
 
   const events = data.events || [];
   const amount = formatMoney(data.amount_in_dispute);
+  const documents = data.documents || [];
 
   return (
     <div className="dossier-screen">
@@ -653,6 +655,13 @@ function DossierScreen({ data, assessment, assessmentLoading, onBack, onAddEvent
           <span className="dot" />
           Case file
         </div>
+        {documents.length > 0 && (
+          <button className="docs-launcher" onClick={() => setDocsOpen(true)}>
+            <DocIcon />
+            Documents
+            <span className="docs-count">{documents.length}</span>
+          </button>
+        )}
       </header>
 
       <main className="dossier">
@@ -738,7 +747,204 @@ function DossierScreen({ data, assessment, assessmentLoading, onBack, onAddEvent
           onSubmit={onAddEvent}
         />
       )}
+
+      <DocumentsDrawer
+        documents={documents}
+        events={events}
+        open={docsOpen}
+        onClose={() => setDocsOpen(false)}
+      />
+
+      <DossierChat matter={data.matter_type} />
     </div>
+  );
+}
+
+// Floating side chat to discuss the case file. Answers come from the backend,
+// grounded in the current dossier (timeline, parties, obligations…).
+function DossierChat({ matter }) {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, busy, open]);
+
+  async function send() {
+    const text = input.trim();
+    if (!text || busy) return;
+    setMessages((m) => [...m, { role: "user", text }]);
+    setInput("");
+    setBusy(true);
+    try {
+      const res = await fetch("/api/dossier/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, message: text }),
+      });
+      const data = await res.json();
+      setMessages((m) => [...m, { role: "agent", text: data.reply || "…" }]);
+    } catch {
+      setMessages((m) => [...m, { role: "agent", text: "Sorry, I couldn't answer just now." }]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button className="chat-launcher" onClick={() => setOpen(true)}>
+        <ChatIcon />
+        Ask about this case
+      </button>
+    );
+  }
+
+  return (
+    <div className="chat-panel">
+      <header className="chat-head">
+        <div className="chat-head-title">
+          <ChatIcon />
+          <span>Ask about this case</span>
+        </div>
+        <button className="chat-close" onClick={() => setOpen(false)} aria-label="Close chat">
+          ✕
+        </button>
+      </header>
+
+      <div className="chat-body" ref={scrollRef}>
+        {messages.length === 0 && (
+          <div className="chat-empty">
+            <p>Ask anything about this case file.</p>
+            <div className="chat-suggestions">
+              {[
+                "Summarise this case in one line",
+                "What deadlines were missed?",
+                "How much could I claim?",
+              ].map((s) => (
+                <button key={s} className="chat-suggestion" onClick={() => setInput(s)}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {messages.map((m, i) => (
+          <div key={i} className={"chat-msg " + m.role}>
+            {m.text}
+          </div>
+        ))}
+        {busy && (
+          <div className="chat-msg agent">
+            <span className="typing">
+              <span />
+              <span />
+              <span />
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className="chat-composer">
+        <input
+          value={input}
+          placeholder="Ask about this case…"
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") send();
+          }}
+        />
+        <button className="chat-send" onClick={send} disabled={busy || !input.trim()}>
+          <ArrowUpIcon />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ChatIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+    </svg>
+  );
+}
+
+// Collapsible right drawer listing the case documents. Each document shows its
+// type + description, a hover preview, and the events that cite it (with the
+// locator inside the document). Clicking a reference opens the doc at its page.
+function DocumentsDrawer({ documents = [], events = [], open, onClose }) {
+  // Group the events that cite each document, by filename.
+  const refsByDoc = {};
+  for (const e of events) {
+    if (e.source && e.citation) {
+      (refsByDoc[e.source] ||= []).push(e);
+    }
+  }
+
+  return (
+    <>
+      <div
+        className={"docs-scrim" + (open ? " show" : "")}
+        onClick={onClose}
+        aria-hidden={!open}
+      />
+      <aside className={"docs-drawer" + (open ? " open" : "")} aria-hidden={!open}>
+        <header className="docs-head">
+          <div className="docs-head-title">
+            <DocIcon />
+            <span>Documents</span>
+            <span className="docs-count">{documents.length}</span>
+          </div>
+          <button className="chat-close" onClick={onClose} aria-label="Close documents">
+            ✕
+          </button>
+        </header>
+
+        <div className="docs-body">
+          {documents.length === 0 && <p className="tone-sub">No documents in this case.</p>}
+          {documents.map((d) => {
+            const refs = refsByDoc[d.name] || [];
+            return (
+              <div key={d.name} className="doc-card">
+                <div className="doc-type">{d.doc_type}</div>
+                <SourceLink source={d.name} />
+                <p className="doc-desc">{d.description}</p>
+                {refs.length > 0 && (
+                  <div className="doc-refs">
+                    <div className="doc-refs-label">Used in {refs.length} event{refs.length > 1 ? "s" : ""}</div>
+                    {refs.map((e, i) => (
+                      <a
+                        key={i}
+                        className="doc-ref"
+                        href={
+                          docUrl(d.name) + (e.citation?.page ? `#page=${e.citation.page}` : "")
+                        }
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <span className="doc-ref-title">{e.title}</span>
+                        <span className="doc-ref-loc">
+                          <PinIcon />
+                          {e.citation.location}
+                          {e.citation.page ? ` · p.${e.citation.page}` : ""}
+                        </span>
+                        {e.citation.quote && (
+                          <span className="doc-ref-quote">“{e.citation.quote}”</span>
+                        )}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -1080,7 +1286,17 @@ function TimelineCard({ event: e }) {
           {isManual && <span className="badge manual">Manual</span>}
         </div>
       )}
-      {hasDoc && <SourceLink source={e.source} />}
+      {hasDoc && <SourceLink source={e.source} page={e.citation?.page} />}
+      {hasDoc && e.citation && (
+        <div className="tl-citation">
+          <span className="tl-citation-loc">
+            <PinIcon />
+            {e.citation.location}
+            {e.citation.page ? ` · p.${e.citation.page}` : ""}
+          </span>
+          {e.citation.quote && <span className="tl-citation-quote">“{e.citation.quote}”</span>}
+        </div>
+      )}
     </div>
   );
 }
@@ -1089,13 +1305,21 @@ function TimelineCard({ event: e }) {
 // full document in a new tab. The preview is a fixed-position popover so it is
 // never clipped by the scrolling timeline, and flips side/clamps to stay on
 // screen. The media (img / pdf iframe) only mounts while hovering.
-function SourceLink({ source }) {
+function SourceLink({ source, page, label }) {
   const ref = useRef(null);
   const [pos, setPos] = useState(null); // { top, left } or null
-  const url = docUrl(source);
+  const base = docUrl(source);
   const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(source);
   const isPdf = /\.pdf$/i.test(source);
   const previewable = isImage || isPdf;
+  // Deep-link a PDF to the cited page; the preview iframe gets the same anchor.
+  const linkUrl = base + (isPdf && page ? `#page=${page}` : "");
+  const previewUrl =
+    base +
+    "#" +
+    [isPdf && page ? `page=${page}` : null, "toolbar=0", "navpanes=0", "view=FitH"]
+      .filter(Boolean)
+      .join("&");
 
   function show() {
     const r = ref.current?.getBoundingClientRect();
@@ -1116,14 +1340,14 @@ function SourceLink({ source }) {
       <a
         ref={ref}
         className="tl-doc"
-        href={url}
+        href={linkUrl}
         target="_blank"
         rel="noreferrer"
         onMouseEnter={previewable ? show : undefined}
         onMouseLeave={() => setPos(null)}
       >
         <DocIcon />
-        <span className="tl-doc-name">{source}</span>
+        <span className="tl-doc-name">{label || source}</span>
       </a>
       {pos &&
         previewable &&
@@ -1133,9 +1357,9 @@ function SourceLink({ source }) {
           // transform) would otherwise become its containing block.
           <div className="src-preview" style={{ top: pos.top, left: pos.left }}>
             {isImage ? (
-              <img src={url} alt={source} />
+              <img src={base} alt={source} />
             ) : (
-              <iframe src={url + "#toolbar=0&navpanes=0&view=FitH"} title={source} />
+              <iframe src={previewUrl} title={source} />
             )}
             <div className="src-preview-name">
               <DocIcon />
@@ -1189,6 +1413,15 @@ function ClockIcon() {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="9" />
       <polyline points="12 7 12 12 15 14" />
+    </svg>
+  );
+}
+
+function PinIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+      <circle cx="12" cy="10" r="3" />
     </svg>
   );
 }
