@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 const sessionId = "sess-" + Math.random().toString(36).slice(2);
 
@@ -699,14 +700,7 @@ function DossierScreen({ data, assessment, assessmentLoading, onBack }) {
           </section>
         )}
 
-        <section className="timeline">
-          {events.map((e, i) => (
-            <TimelineItem key={i} event={e} />
-          ))}
-          {events.length === 0 && (
-            <p className="tone-sub">No dated events were found.</p>
-          )}
-        </section>
+        <Timeline events={events} obligations={data.obligations || []} />
 
         <DisclaimerFooter />
       </main>
@@ -718,28 +712,234 @@ function docUrl(source) {
   return `/api/document?session_id=${encodeURIComponent(sessionId)}&name=${encodeURIComponent(source)}`;
 }
 
-function TimelineItem({ event: e }) {
-  const hasDoc = e.source && e.source !== "Conversation";
+// --- Scaled timeline --------------------------------------------------------
+// The central line represents time: events are grouped by date (so events on
+// the SAME date share one node), and the vertical gap between consecutive
+// groups is proportional to the real time elapsed between them.
+
+const DAY_MS = 86400000;
+const MIN_GAP = 64; // px — keeps close dates readable
+const SCALE = 260; // px — vertical span given to the largest single gap
+
+// Build the date-grouped, time-scaled structure. Events and obligation due
+// dates share the axis: an obligation is placed at its computed `due_date`, so
+// a "within 30 days of X" deadline lands at the right point on the time scale,
+// joining the same node when it falls on a date that already has events.
+function buildTimeline(events = [], obligations = []) {
+  const dated = events.filter((e) => e.date);
+  const undated = events.filter((e) => !e.date);
+
+  const byDate = new Map();
+  const ensure = (date) => {
+    if (!byDate.has(date))
+      byDate.set(date, { date, ts: Date.parse(date), events: [], deadlines: [] });
+    return byDate.get(date);
+  };
+  for (const e of dated) ensure(e.date).events.push(e);
+  for (const o of obligations) if (o.due_date) ensure(o.due_date).deadlines.push(o);
+
+  const groups = [...byDate.values()].sort((a, b) => a.ts - b.ts);
+
+  // Days between each group and the previous one (0 for the first).
+  const gapDays = groups.map((g, i) =>
+    i === 0 ? 0 : Math.round((g.ts - groups[i - 1].ts) / DAY_MS)
+  );
+  const maxGap = Math.max(1, ...gapDays);
+
+  return { groups, gapDays, maxGap, undated };
+}
+
+// Pixel offset above a group, linear in elapsed time (floored so close dates
+// stay legible). This is what makes the timeline "to scale".
+function gapToPx(days, maxGap) {
+  if (!days) return 0;
+  return Math.max(MIN_GAP, Math.round((days / maxGap) * SCALE));
+}
+
+// A human label for the elapsed time, shown in larger gaps.
+function humaniseGap(days) {
+  if (days < 7) return null;
+  if (days < 31) return `~${Math.round(days / 7)} week${days >= 14 ? "s" : ""} later`;
+  if (days < 365) return `~${Math.round(days / 30)} month${days >= 60 ? "s" : ""} later`;
+  const years = days / 365;
+  return `~${years.toFixed(years >= 2 ? 0 : 1)} year${years >= 1.5 ? "s" : ""} later`;
+}
+
+const COMPACT_GAP = 16; // px — uniform spacing in compact (non-scaled) mode
+
+function Timeline({ events = [], obligations = [] }) {
+  const [scaled, setScaled] = useState(true);
+  const { groups, gapDays, maxGap, undated } = buildTimeline(events, obligations);
+
+  if (groups.length === 0 && undated.length === 0) {
+    return <p className="tone-sub">No events were found.</p>;
+  }
+
   return (
-    <div className="tl-item">
-      <span className={"tl-node cat-" + e.category} />
-      <div className="tl-card">
-        <div className="tl-date">{e.date_text || "Date unknown"}</div>
-        <div className="tl-title">{e.title}</div>
-        {e.detail && <p className="tl-desc">{e.detail}</p>}
-        {(e.disputed || e.is_deadline) && (
-          <div className="tl-tags">
-            {e.disputed && <span className="badge disputed">Disputed</span>}
-            {e.is_deadline && <span className="badge deadline">Deadline</span>}
+    <>
+      <div className="tl-controls">
+        <div className="tl-seg" role="group" aria-label="Timeline spacing">
+          <button
+            className={scaled ? "active" : ""}
+            onClick={() => setScaled(true)}
+            aria-pressed={scaled}
+          >
+            To scale
+          </button>
+          <button
+            className={!scaled ? "active" : ""}
+            onClick={() => setScaled(false)}
+            aria-pressed={!scaled}
+          >
+            Compact
+          </button>
+        </div>
+      </div>
+
+      <section className={"timeline" + (scaled ? " scaled" : " compact")}>
+        {groups.map((g, i) => {
+          const side = i % 2 === 0 ? "tl-left" : "tl-right";
+          // Elapsed-time labels only make sense in the to-scale view.
+          const label = scaled ? humaniseGap(gapDays[i]) : null;
+          // The date label: prefer an event's wording, else the deadline's.
+          const dateText =
+            g.events[0]?.date_text || g.deadlines[0]?.due_text || g.date;
+          const marginTop =
+            i === 0 ? 0 : scaled ? gapToPx(gapDays[i], maxGap) : COMPACT_GAP;
+          return (
+            <div key={g.date} className={"tl-group " + side} style={{ marginTop }}>
+              {label && <span className="tl-gap">{label}</span>}
+            <span className="tl-date-pill">{dateText}</span>
+            <div className="tl-cards">
+              {g.events.map((e, j) => (
+                <TimelineCard key={"e" + j} event={e} />
+              ))}
+              {g.deadlines.map((o, j) => (
+                <DeadlineCard key={"d" + j} obligation={o} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+        {undated.length > 0 && (
+          <div className="tl-undated">
+            <div className="tl-undated-label">Undated</div>
+            <div className="tl-undated-cards">
+              {undated.map((e, i) => (
+                <TimelineCard key={i} event={e} />
+              ))}
+            </div>
           </div>
         )}
-        {hasDoc && (
-          <a className="tl-doc" href={docUrl(e.source)} target="_blank" rel="noreferrer">
-            <DocIcon />
-            <span className="tl-doc-name">{e.source}</span>
-          </a>
+      </section>
+    </>
+  );
+}
+
+function TimelineCard({ event: e }) {
+  const hasDoc = e.source && e.source !== "Conversation";
+  return (
+    <div className={"tl-card cat-" + e.category}>
+      <div className="tl-title">{e.title}</div>
+      {e.detail && <p className="tl-desc">{e.detail}</p>}
+      {(e.disputed || e.is_deadline) && (
+        <div className="tl-tags">
+          {e.disputed && <span className="badge disputed">Disputed</span>}
+          {e.is_deadline && <span className="badge deadline">Deadline</span>}
+        </div>
+      )}
+      {hasDoc && <SourceLink source={e.source} />}
+    </div>
+  );
+}
+
+// A document link that previews its source on hover. Clicking still opens the
+// full document in a new tab. The preview is a fixed-position popover so it is
+// never clipped by the scrolling timeline, and flips side/clamps to stay on
+// screen. The media (img / pdf iframe) only mounts while hovering.
+function SourceLink({ source }) {
+  const ref = useRef(null);
+  const [pos, setPos] = useState(null); // { top, left } or null
+  const url = docUrl(source);
+  const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(source);
+  const isPdf = /\.pdf$/i.test(source);
+  const previewable = isImage || isPdf;
+
+  function show() {
+    const r = ref.current?.getBoundingClientRect();
+    if (!r) return;
+    const W = 340;
+    const H = 420;
+    let left = r.right + 12;
+    if (left + W > window.innerWidth - 8) left = r.left - W - 12; // flip to the left
+    left = Math.max(8, left);
+    let top = r.top;
+    if (top + H > window.innerHeight - 8) top = window.innerHeight - H - 8;
+    top = Math.max(8, top);
+    setPos({ top, left });
+  }
+
+  return (
+    <>
+      <a
+        ref={ref}
+        className="tl-doc"
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        onMouseEnter={previewable ? show : undefined}
+        onMouseLeave={() => setPos(null)}
+      >
+        <DocIcon />
+        <span className="tl-doc-name">{source}</span>
+      </a>
+      {pos &&
+        previewable &&
+        createPortal(
+          // Rendered into <body> so `position: fixed` resolves against the
+          // viewport — a transformed ancestor (the card's hover/animation
+          // transform) would otherwise become its containing block.
+          <div className="src-preview" style={{ top: pos.top, left: pos.left }}>
+            {isImage ? (
+              <img src={url} alt={source} />
+            ) : (
+              <iframe src={url + "#toolbar=0&navpanes=0&view=FitH"} title={source} />
+            )}
+            <div className="src-preview-name">
+              <DocIcon />
+              {source}
+            </div>
+          </div>,
+          document.body
         )}
+    </>
+  );
+}
+
+const STATUS_LABEL = {
+  met: "Met in time",
+  missed: "Deadline missed",
+  pending: "Window open",
+  unknown: "Status unclear",
+};
+
+// A relative deadline: "do X within N days of [anchor]", shown at its computed
+// due date. The status drives the colour (missed = red, met = green, …).
+function DeadlineCard({ obligation: o }) {
+  const status = o.status || "unknown";
+  return (
+    <div className={"tl-card tl-deadline status-" + status}>
+      <div className="tl-deadline-head">
+        <ClockIcon />
+        <span className="tl-deadline-due">Due {o.due_text || "—"}</span>
+        <span className={"badge status-" + status}>{STATUS_LABEL[status]}</span>
       </div>
+      <div className="tl-title">{o.action}</div>
+      <p className="tl-desc">
+        Within {o.window_days} day{o.window_days === 1 ? "" : "s"} of {o.anchor_text}
+        {o.basis ? ` · ${o.basis}` : ""}
+      </p>
     </div>
   );
 }
@@ -749,6 +949,15 @@ function DocIcon() {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
       <polyline points="14 2 14 8 20 8" />
+    </svg>
+  );
+}
+
+function ClockIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <polyline points="12 7 12 12 15 14" />
     </svg>
   );
 }

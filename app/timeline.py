@@ -71,6 +71,51 @@ class Deadline(BaseModel):
     label: str
 
 
+class ObligationStatus(str, Enum):
+    """Whether a time-limited action was done in time."""
+
+    met = "met"  # evidence shows it was done within the window
+    missed = "missed"  # not done, or the window clearly passed with no action
+    pending = "pending"  # window still open
+    unknown = "unknown"
+
+
+class Obligation(BaseModel):
+    """A time-limited action: "do X within N days of an anchor date".
+
+    Models a *relative* legal deadline (e.g. "protect the deposit within 30 days
+    of receipt"). The model supplies the anchor and the window; the absolute
+    `due_date` is computed in code (`compute_due`) rather than guessed, so the
+    arithmetic is always correct.
+    """
+
+    action: str = Field(description="What must be done, as a short headline.")
+    anchor_date: dt.date | None = Field(
+        None, description="ISO date the clock starts from (the anchoring event)."
+    )
+    anchor_text: str = Field(
+        description="The anchoring event in words, e.g. 'deposit received'."
+    )
+    window_days: int = Field(description="Number of days allowed after the anchor.")
+    due_date: dt.date | None = Field(
+        None, description="Computed deadline — leave null; filled in code."
+    )
+    due_text: str = Field(
+        default="", description="Human label for the due date — filled in code."
+    )
+    basis: str | None = Field(
+        None, description="Legal basis, e.g. 'Housing Act 2004 s.213' or a clause."
+    )
+    status: ObligationStatus = ObligationStatus.unknown
+
+    def compute_due(self) -> "Obligation":
+        """Derive the absolute due date and its label from anchor + window."""
+        if self.anchor_date is not None and self.window_days:
+            self.due_date = self.anchor_date + dt.timedelta(days=self.window_days)
+            self.due_text = f"{self.due_date.day} {self.due_date:%B %Y}"
+        return self
+
+
 class CaseFile(BaseModel):
     """The full snapshot: synthesis header + chronological events."""
 
@@ -85,8 +130,18 @@ class CaseFile(BaseModel):
     amount_in_dispute: Money | None = None
     next_deadline: Deadline | None = None
     events: list[Event] = Field(default_factory=list)
+    obligations: list[Obligation] = Field(
+        default_factory=list,
+        description="Time-limited actions ('do X within N days of a date').",
+    )
 
     def sorted(self) -> "CaseFile":
-        """Order events oldest-first; undated events fall to the end."""
+        """Order events oldest-first; undated events fall to the end.
+
+        Also derives each obligation's absolute due date from its anchor and
+        window, so the arithmetic is computed rather than guessed.
+        """
         self.events.sort(key=lambda e: e.date or dt.date.max)
+        for o in self.obligations:
+            o.compute_due()
         return self

@@ -14,7 +14,9 @@ The aim is to give a lawyer a clear picture of the matter.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import os
+import re
 from dataclasses import dataclass, field
 
 from openai import AsyncOpenAI
@@ -25,7 +27,16 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from .timeline import CaseFile
+from .timeline import (
+    CaseFile,
+    Category,
+    Deadline,
+    Event,
+    Money,
+    Obligation,
+    ObligationStatus,
+    Party,
+)
 
 # The app talks to OpenAI directly, authenticated with a standard API key.
 # Configured through environment vars.
@@ -34,6 +45,9 @@ MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 
 # Sample-case directory used by the dev intake bypass (see BY_PASS_INTAKE below).
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+
+# Where the upload flow persists documents on disk (mirrors main.py).
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
 
 # When set, skip the intake conversation entirely and preload a sample case's
 # documents so we can iterate on the timeline. Empty / falsy disables it; a
@@ -121,6 +135,17 @@ Produce:
   court date, limitation), only if one exists. Use a short label.
 - events: the chronological timeline. Extract EVERY dated fact — one event per
   distinct fact. A single document often yields many events.
+- obligations: time-limited actions of the form "X must be done within N days of
+  [an event]" (e.g. "a deposit must be protected within 30 days of receipt", "an
+  appeal must be filed within 3 months of the dismissal"). For each, give:
+  action (what must be done), anchor_text (the triggering event in words) and
+  anchor_date (its ISO date), window_days (the number of days; convert weeks/
+  months to days, e.g. 3 months ≈ 90), basis (the statute, regulation or
+  contract clause if known), and status: "met" if the facts show it was done in
+  time, "missed" if it was not done or the window has clearly passed with no
+  action, "pending" if the window is still open, otherwise "unknown". Do NOT
+  compute the deadline date yourself — leave due_date null; it is derived from
+  anchor_date + window_days.
 
 For each event:
 - date: the normalised ISO date (YYYY-MM-DD), used for sorting. Resolve relative
@@ -262,6 +287,147 @@ def load_sample_documents(case: str) -> list[tuple[str, bytes]]:
             with open(path, "rb") as fh:
                 docs.append((name, fh.read()))
     return docs
+
+
+# Sources reference the real files in data/case-1 so the hover preview works.
+_SRC_BANK = "bank_statement_deposit_payment.pdf"
+_SRC_TENANCY = "tenancy_agreement.pdf"
+_SRC_DPS = "dps_search_result.png"
+_SRC_MYD = "mydeposits_search_result.png"
+_SRC_TDS = "tds_search_result.png"
+_CONV = "Conversation"
+
+
+def sample_case_file() -> CaseFile:
+    """A rich, hand-crafted case file for the dev bypass.
+
+    Returned instead of calling the model when BY_PASS_INTAKE is set, so the
+    timeline renders instantly and deterministically while exercising every UI
+    feature: a long time span (to show scaling), same-date grouping (three
+    events on 22 Apr), disputed facts, deadline events, an undated event, every
+    category colour, and obligations of each status (met / missed / pending).
+    """
+
+    def gbp(amount: float) -> Money:
+        return Money(amount=amount, currency="GBP")
+
+    def ev(date, date_text, title, detail, category, source, **kw) -> Event:
+        return Event(
+            date=dt.date.fromisoformat(date) if date else None,
+            date_text=date_text,
+            title=title,
+            detail=detail,
+            category=category,
+            source=source,
+            **kw,
+        )
+
+    events = [
+        ev("2024-03-15", "15 March 2024", "Property viewing",
+           "Jamie viewed the flat at 14 Elm Road and verbally agreed to rent it.",
+           Category.other, _CONV, parties=["Jamie Watson", "Acorn Lettings"]),
+        ev("2024-04-01", "1 April 2024", "Holding deposit paid",
+           "Jamie paid a £500 holding deposit to reserve the property.",
+           Category.payment, _SRC_BANK, parties=["Jamie Watson"], amount=gbp(500)),
+        ev("2024-04-13", "13 April 2024", "Tenancy deposit paid",
+           "Jamie paid the £1,800 tenancy deposit to the landlord by bank transfer.",
+           Category.payment, _SRC_BANK, parties=["Jamie Watson", "Mr R. Hale"], amount=gbp(1800)),
+        ev("2024-04-17", "17 April 2024", "Tenancy agreement signed",
+           "Both parties signed a 12-month assured shorthold tenancy.",
+           Category.agreement, _SRC_TENANCY, parties=["Jamie Watson", "Mr R. Hale"]),
+        ev("2024-04-17", "17 April 2024", "Tenancy term begins",
+           "The fixed term started under the signed agreement.",
+           Category.agreement, _SRC_TENANCY),
+        ev("2024-04-22", "22 April 2024", "DPS — no record found",
+           "A Deposit Protection Service search returned no protected deposit.",
+           Category.decision, _SRC_DPS, disputed=True),
+        ev("2024-04-22", "22 April 2024", "MyDeposits — no record found",
+           "A MyDeposits scheme search returned no record of the deposit.",
+           Category.decision, _SRC_MYD, disputed=True),
+        ev("2024-04-22", "22 April 2024", "TDS — no record found",
+           "A Tenancy Deposit Scheme search also returned no record.",
+           Category.decision, _SRC_TDS, disputed=True),
+        ev("2024-06-30", "30 June 2024", "Tenant queries protection",
+           "Jamie emailed the landlord asking which scheme protected the deposit.",
+           Category.communication, _CONV, parties=["Jamie Watson", "Mr R. Hale"]),
+        ev("2024-07-10", "10 July 2024", "Landlord's reply",
+           "The landlord replied that the deposit 'would be protected soon'.",
+           Category.communication, _CONV, parties=["Mr R. Hale"], disputed=True),
+        ev("2024-12-02", "2 December 2024", "Boiler breakdown reported",
+           "Jamie reported a broken boiler; the repair took three weeks.",
+           Category.incident, _CONV),
+        ev("2025-01-15", "15 January 2025", "Section 21 notice served",
+           "The landlord served a Section 21 notice to end the tenancy.",
+           Category.notice, _CONV, parties=["Mr R. Hale"]),
+        ev("2025-03-20", "20 March 2025", "Deposit not returned",
+           "At the end of the tenancy the £1,800 deposit was not returned.",
+           Category.breach, _CONV, amount=gbp(1800), disputed=True),
+        ev("2025-04-05", "5 April 2025", "Letter before action sent",
+           "Jamie's adviser sent a letter before action seeking the deposit and a penalty.",
+           Category.legal_action, _CONV, parties=["Jamie Watson", "Mr R. Hale"]),
+        ev(None, "Date unknown", "Check-in inventory",
+           "An undated check-in inventory report exists but carries no date.",
+           Category.other, _CONV),
+    ]
+
+    obligations = [
+        Obligation(
+            action="Protect the deposit in an authorised scheme",
+            anchor_text="the deposit was received", anchor_date=dt.date(2024, 4, 13),
+            window_days=30, basis="Housing Act 2004 s.213", status=ObligationStatus.missed),
+        Obligation(
+            action="Serve the prescribed information to the tenant",
+            anchor_text="the deposit was received", anchor_date=dt.date(2024, 4, 13),
+            window_days=30, basis="Housing Act 2004 s.213(6)", status=ObligationStatus.missed),
+        Obligation(
+            action="Apply the holding deposit to the first rent",
+            anchor_text="the holding deposit was paid", anchor_date=dt.date(2024, 4, 1),
+            window_days=15, basis="Tenant Fees Act 2019 Sch.2", status=ObligationStatus.met),
+        Obligation(
+            action="Respond to the letter before action",
+            anchor_text="the letter before action was sent", anchor_date=dt.date(2025, 4, 5),
+            window_days=14, basis="Pre-action conduct protocol", status=ObligationStatus.pending),
+    ]
+
+    return CaseFile(
+        matter_type="Tenancy deposit protection & return",
+        summary=(
+            "Jamie Watson paid a £1,800 deposit on a 12-month tenancy at 14 Elm Road. "
+            "Searches of all three government schemes show the deposit was never "
+            "protected, and at the end of the tenancy it was not returned. Jamie is "
+            "seeking the deposit back plus the statutory penalty."
+        ),
+        case_assessment=(
+            "Your position looks strong. The evidence shows your £1,800 deposit was "
+            "never protected in any of the three government-approved schemes, and it "
+            "was not returned when your tenancy ended.\n\n"
+            "Here's what the documents show: your bank statement records the £1,800 "
+            "paid on 13 April 2024, your signed tenancy began on 17 April 2024, and "
+            "the DPS, MyDeposits and TDS searches on 22 April 2024 all returned no "
+            "record of protection.\n\n"
+            "Under the Housing Act 2004 (s.213) a landlord must protect a deposit and "
+            "serve the prescribed information within 30 days of receiving it — here, "
+            "by 13 May 2024. Neither was done, which is a separate breach in its own "
+            "right.\n\n"
+            "What this means for you: you can claim the return of your £1,800 deposit "
+            "and a penalty of between one and three times that amount — so up to "
+            "£5,400 on top of the deposit.\n\n"
+            "The claim is well evidenced by your own documents, which makes it hard to "
+            "dispute. One thing to be aware of: the penalty amount is at the court's "
+            "discretion, so the full 3x is not guaranteed."
+        ),
+        parties=[
+            Party(name="Jamie Watson", role="client / tenant"),
+            Party(name="Mr R. Hale", role="landlord"),
+            Party(name="Acorn Lettings", role="letting agent"),
+        ],
+        amount_in_dispute=gbp(1800),
+        next_deadline=Deadline(
+            date=dt.date(2025, 4, 19), date_text="19 April 2025",
+            label="Landlord's response to letter before action"),
+        events=events,
+        obligations=obligations,
+    )
 
 
 class IntakeReply(BaseModel):
@@ -437,18 +603,31 @@ class IntakeAgent:
         self._session(session_id).documents.extend(files)
 
     def get_document(self, session_id: str, name: str) -> tuple[bytes, str] | None:
-        """Return (bytes, media_type) for an uploaded document, or None.
+        """Return (bytes, media_type) for a document, or None.
 
-        Matches on the full name first, then on the basename, so a timeline
-        event's `source` resolves even if the path differs slightly.
+        Looks in the in-memory session first (matching on full name then
+        basename), then falls back to disk so previews keep working after a
+        backend reload or in a fresh session: uploaded files under
+        `uploads/<session>/`, and sample-case files under `data/<case>/` when
+        the dev bypass is active.
         """
-        session = self.sessions.get(session_id)
-        if session is None:
-            return None
         base = os.path.basename(name)
-        for fname, data in session.documents:
-            if fname == name or os.path.basename(fname) == base:
-                return data, media_type_for(fname)
+        session = self.sessions.get(session_id)
+        if session is not None:
+            for fname, data in session.documents:
+                if fname == name or os.path.basename(fname) == base:
+                    return data, media_type_for(fname)
+
+        # Disk fallbacks — independent of the in-memory session.
+        safe = re.sub(r"[^A-Za-z0-9_-]", "", session_id) or "session"
+        candidates = [os.path.join(UPLOAD_DIR, safe, base)]
+        case = _bypass_case()
+        if case:
+            candidates.append(os.path.join(DATA_DIR, case, base))
+        for path in candidates:
+            if os.path.isfile(path):
+                with open(path, "rb") as fh:
+                    return fh.read(), media_type_for(base)
         return None
 
     # --- Case file -----------------------------------------------------------
@@ -475,6 +654,15 @@ class IntakeAgent:
         the session for that follow-up call.
         """
         session = self._session(session_id)
+
+        # DEV bypass: serve a rich, hand-crafted case file with no model call so
+        # the timeline renders instantly while iterating on the UI.
+        if _bypass_case():
+            case = sample_case_file()
+            case.sorted()
+            session.case_file = case
+            return case
+
         transcript = "\n".join(f"{role}: {text}" for role, text in session.transcript)
         prompt: list = [
             "Here is a completed legal intake.\n\n"
@@ -499,6 +687,9 @@ class IntakeAgent:
         """
         session = self._session(session_id)
         case = session.case_file or await self.build_case_file(session_id)
+        # Already written (e.g. the bypass sample) — no model call needed.
+        if case.case_assessment.strip():
+            return case.case_assessment
         assessment = await self._run_agent(self.assessor, [self._case_facts(case)])
         case.case_assessment = (assessment or "").strip()
         return case.case_assessment
@@ -515,6 +706,15 @@ class IntakeAgent:
             lines.append(f"Amount in dispute: {m.currency} {m.amount}")
         if case.next_deadline:
             lines.append(f"Next deadline: {case.next_deadline.label} ({case.next_deadline.date_text})")
+        if case.obligations:
+            lines.append("\nTime-limited obligations:")
+            for o in case.obligations:
+                due = f" → due {o.due_text}" if o.due_text else ""
+                basis = f" [{o.basis}]" if o.basis else ""
+                lines.append(
+                    f"  - {o.action}: within {o.window_days} days of "
+                    f"{o.anchor_text}{due} ({o.status.value}){basis}"
+                )
         lines.append("\nTimeline of evidenced facts:")
         for e in case.events:
             amt = f" — {e.amount.currency} {e.amount.amount}" if e.amount else ""

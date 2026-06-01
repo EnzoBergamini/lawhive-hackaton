@@ -546,10 +546,46 @@ body {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Timeline — central spine, cards alternating left/right */
+/* Timeline view controls (to-scale ⇄ compact) */
+.tl-controls {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 920px;
+  margin: 0 auto 4px;
+}
+.tl-seg {
+  display: inline-flex;
+  background: #ece9e3;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+}
+.tl-seg button {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 5px 14px;
+  border-radius: 999px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.tl-seg button:hover { color: #3a362f; }
+.tl-seg button.active {
+  background: #fff;
+  color: #2f5a8a;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* Timeline — central spine to scale; vertical gaps ∝ elapsed time. Events on
+   the same date are grouped under one node; cards alternate left/right.
+   In `.compact` mode the gaps are uniform (not time-scaled). */
 .timeline {
   position: relative;
-  max-width: 880px;
+  max-width: 920px;
   margin: 0 auto;
   padding: 8px 0 48px;
 }
@@ -563,34 +599,76 @@ body {
   background: var(--line);
   transform: translateX(-50%);
 }
-.tl-item {
-  position: relative;
-  width: 50%;
-  box-sizing: border-box;
-  padding: 12px 40px;
-  margin-bottom: 6px;
-}
-.tl-item:nth-child(odd) { left: 0; }
-.tl-item:nth-child(even) { left: 50%; }
 
-/* Node on the central spine, coloured by category */
-.tl-node {
-  position: absolute;
-  top: 26px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #8a857c;
-  box-shadow: 0 0 0 4px var(--bg);
-  z-index: 1;
+/* One date group (shares a single point on the time axis) */
+.tl-group {
+  position: relative;
+  min-height: 30px;
 }
-.tl-item:nth-child(odd) .tl-node { right: -7px; }
-.tl-item:nth-child(even) .tl-node { left: -7px; }
+/* Connector from the central spine to the group's cards */
+.tl-group::after {
+  content: "";
+  position: absolute;
+  top: 13px;
+  height: 2px;
+  width: 4%;
+  background: var(--line);
+  z-index: 0;
+}
+.tl-left.tl-group::after { left: 46%; }
+.tl-right.tl-group::after { left: 50%; }
+
+/* Elapsed-time marker shown in larger gaps, centred on the spine */
+.tl-gap {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: var(--bg);
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+/* Date tick: the actual point on the time axis */
+.tl-date-pill {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+  box-shadow: 0 0 0 4px var(--bg);
+}
+
+/* Cards for the group, on one side of the spine */
+.tl-cards {
+  width: 46%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tl-left .tl-cards { margin-right: 54%; }
+.tl-right .tl-cards { margin-left: 54%; }
 
 /* Event card */
 .tl-card {
   background: #fff;
   border: 1px solid var(--line);
+  border-left: 3px solid #8a857c;
   border-radius: 14px;
   padding: 14px 16px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 8px 24px rgba(0, 0, 0, 0.05);
@@ -601,14 +679,64 @@ body {
   transform: translateY(-2px);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.09);
 }
-.tl-date {
+.tl-title { font-size: 15px; font-weight: 700; line-height: 1.4; }
+
+/* Relative deadline ("within N days of …"), placed at its computed due date */
+.tl-deadline {
+  border-left-width: 3px;
+  border-style: dashed;
+  background: #fffdf8;
+}
+.tl-deadline-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 4px;
+  color: var(--muted);
+}
+.tl-deadline-due {
   font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.tl-deadline .tl-deadline-head .badge { margin-left: auto; }
+
+/* Status colours for a deadline */
+.tl-deadline.status-missed { border-color: #c0492f; background: #fdf3f0; }
+.tl-deadline.status-met { border-color: #2f6b4f; background: #f1f8f3; }
+.tl-deadline.status-pending { border-color: #8a6d1f; background: #fdf9ef; }
+.tl-deadline.status-unknown { border-color: #8a857c; }
+.badge.status-missed { background: #f7d9d1; color: #a14a2f; }
+.badge.status-met { background: #d9efe0; color: #2f6b4f; }
+.badge.status-pending { background: #fdf3df; color: #8a6d1f; }
+.badge.status-unknown { background: #ece9e3; color: #6b665d; }
+
+/* Undated events, grouped at the end */
+.tl-undated {
+  position: relative;
+  margin-top: 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tl-undated-label {
+  align-self: center;
+  background: var(--bg);
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
 }
-.tl-title { font-size: 15px; font-weight: 700; line-height: 1.4; margin-top: 3px; }
+.tl-undated-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 46%;
+  margin: 8px auto 0;
+}
 .tl-desc { font-size: 13.5px; line-height: 1.55; color: #514c43; margin: 6px 0 0; }
 .tl-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 
@@ -633,6 +761,49 @@ body {
 .tl-doc svg { flex: none; }
 .tl-doc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Hover preview of an event's source document */
+.src-preview {
+  position: fixed;
+  z-index: 1000;
+  width: 340px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none; /* preview is passive; the link itself handles clicks */
+  animation: rise 0.14s ease both;
+}
+.src-preview img {
+  display: block;
+  width: 100%;
+  max-height: 380px;
+  object-fit: contain;
+  background: #f3f1ec;
+}
+.src-preview iframe {
+  width: 100%;
+  height: 380px;
+  border: 0;
+  background: #f3f1ec;
+}
+.src-preview-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 11px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.src-preview-name svg { flex: none; }
+
 /* Badges (rare, meaningful flags only) */
 .badge {
   font-size: 11px;
@@ -644,17 +815,17 @@ body {
 .badge.disputed { background: #fbeae5; color: #a14a2f; }
 .badge.deadline { background: #fdf3df; color: #8a6d1f; }
 
-/* Node colours per category */
-.tl-node.cat-agreement,
-.tl-node.cat-decision { background: #2f6b4f; }
-.tl-node.cat-payment,
-.tl-node.cat-legal_action { background: #2f5a8a; }
-.tl-node.cat-communication { background: #6b4f8a; }
-.tl-node.cat-breach,
-.tl-node.cat-complaint,
-.tl-node.cat-incident { background: #a14a2f; }
-.tl-node.cat-notice,
-.tl-node.cat-deadline { background: #8a6d1f; }
+/* Card accent colours per category */
+.tl-card.cat-agreement,
+.tl-card.cat-decision { border-left-color: #2f6b4f; }
+.tl-card.cat-payment,
+.tl-card.cat-legal_action { border-left-color: #2f5a8a; }
+.tl-card.cat-communication { border-left-color: #6b4f8a; }
+.tl-card.cat-breach,
+.tl-card.cat-complaint,
+.tl-card.cat-incident { border-left-color: #a14a2f; }
+.tl-card.cat-notice,
+.tl-card.cat-deadline { border-left-color: #8a6d1f; }
 
 @media (max-width: 720px) {
   .tone-grid { grid-template-columns: 1fr; }
@@ -664,16 +835,29 @@ body {
   .dossier-back { left: 12px; }
 
   /* Single column: spine on the left, all cards to the right */
-  .timeline::before { left: 7px; }
-  .tl-item,
-  .tl-item:nth-child(odd),
-  .tl-item:nth-child(even) {
-    width: 100%;
-    left: 0;
-    padding: 10px 0 10px 30px;
+  .timeline::before { left: 9px; }
+  .tl-date-pill {
+    left: 9px;
+    transform: none;
   }
-  .tl-item:nth-child(odd) .tl-node,
-  .tl-item:nth-child(even) .tl-node { left: 1px; right: auto; }
+  .tl-gap {
+    left: 9px;
+    transform: none;
+  }
+  .tl-cards,
+  .tl-left .tl-cards,
+  .tl-right .tl-cards {
+    width: auto;
+    margin: 32px 0 0 36px;
+  }
+  .tl-left.tl-group::after,
+  .tl-right.tl-group::after {
+    left: 9px;
+    width: 27px;
+    top: 13px;
+  }
+  .tl-undated-cards { max-width: none; margin: 8px 0 0 36px; }
+  .tl-undated-label { align-self: flex-start; margin-left: 36px; }
 }
 
 /* Scrollbar */
